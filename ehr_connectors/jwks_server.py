@@ -15,6 +15,9 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,18 +31,31 @@ async def lifespan(app: FastAPI):
     """Load JWKS data on startup."""
     global _jwks_data
     logger.info("--- JWKS SERVER VERSION 1.2 ---")
-    logger.info(f"Reading from: {JWKS_FILE.resolve()}")
+    # Try loading from environment variable first
+    env_jwks = os.environ.get("JWKS_JSON")
+    if env_jwks:
+        # Strip leading/trailing single or double quotes added by some .env parsers
+        env_jwks = env_jwks.strip("'\"")
+        try:
+            _jwks_data = json.loads(env_jwks)
+            kids = [k.get("kid", "NO-KID") for k in _jwks_data.get("keys", [])]
+            logger.info(f"Loaded JWKS from environment variable with kids: {kids}")
+        except Exception as e:
+            logger.error(f"❌ Failed to parse JWKS data from environment variable: {e}")
 
-    if not JWKS_FILE.exists():
-        logger.error(
-            f"❌ jwks.json not found at {JWKS_FILE}. "
-            "Please run 'python generate_keys.py' first."
-        )
-    else:
-        with open(JWKS_FILE) as f:
-            _jwks_data = json.load(f)
-        kids = [k.get("kid", "NO-KID") for k in _jwks_data.get("keys", [])]
-        logger.info(f"Loaded JWKS with kids: {kids}")
+    # Fallback to file if environment variable was not set or was invalid
+    if not _jwks_data:
+        logger.info(f"Reading from file: {JWKS_FILE.resolve()}")
+        if not JWKS_FILE.exists():
+            logger.error(
+                f"❌ jwks.json not found at {JWKS_FILE} and environment variable JWKS_JSON is not set. "
+                "Please run 'python generate_keys.py' first."
+            )
+        else:
+            with open(JWKS_FILE) as f:
+                _jwks_data = json.load(f)
+            kids = [k.get("kid", "NO-KID") for k in _jwks_data.get("keys", [])]
+            logger.info(f"Loaded JWKS from file with kids: {kids}")
 
     yield
     # shutdown
