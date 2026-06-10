@@ -6,7 +6,10 @@ WORKDIR /forms-flow-web/app
 COPY forms-flow-web/package-lock.json forms-flow-web/package.json ./
 
 # Install dependencies (include dev deps for build)
-RUN npm ci
+RUN npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retries 5 && \
+    npm ci --legacy-peer-deps
 
 # Copy source code
 COPY forms-flow-web/ ./
@@ -70,7 +73,10 @@ COPY forms-flow-web-root-config/package-lock.json /forms-flow-web-root-config/ap
 COPY forms-flow-web-root-config/package.json /forms-flow-web-root-config/app/package.json
 COPY forms-flow-web-root-config/env.sh /forms-flow-web-root-config/app/env.sh
 # Include dev dependencies here so build tools like cross-env are available
-RUN npm ci
+RUN npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retries 5 && \
+    npm ci --legacy-peer-deps
 
 # Copy source code
 COPY forms-flow-web-root-config/ /forms-flow-web-root-config/app/

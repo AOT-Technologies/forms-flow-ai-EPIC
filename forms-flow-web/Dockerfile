@@ -10,7 +10,10 @@ ENV PATH /forms-flow-web/app/node_modules/.bin:$PATH
 # Install and cache app dependencies
 COPY package-lock.json /forms-flow-web/app/package-lock.json
 COPY package.json /forms-flow-web/app/package.json
-RUN npm ci --only=production
+RUN npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retries 5 && \
+    npm ci --only=production --legacy-peer-deps
 
 # Copy source code
 COPY . /forms-flow-web/app/
