@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EHR DocumentReference Viewer</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,300&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface-2: #1c2330;
+            --border: #30363d;
+            --border-subtle: #21262d;
+            --accent: #58a6ff;
+            --accent-dim: rgba(88, 166, 255, 0.12);
+            --accent-glow: rgba(88, 166, 255, 0.25);
+            --green: #3fb950;
+            --green-dim: rgba(63, 185, 80, 0.12);
+            --red: #f85149;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #484f58;
+            --mono: 'DM Mono', monospace;
+            --serif: 'Fraunces', serif;
+            --sans: 'DM Sans', sans-serif;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--sans);
+            background-color: var(--bg);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* Top bar */
+        .topbar {
+            width: 100%;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 40px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+
+        .topbar-icon {
+            width: 28px;
+            height: 28px;
+            background: var(--accent);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .topbar-title {
+            font-family: var(--serif);
+            font-size: 17px;
+            font-weight: 600;
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }
+
+        .topbar-badge {
+            margin-left: auto;
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--text-muted);
+            background: var(--border-subtle);
+            padding: 3px 8px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+        }
+
+        /* Main content */
+        .main {
+            width: 100%;
+            max-width: 860px;
+            padding: 40px 24px 80px;
+        }
+
+        /* Hero header */
+        .hero {
+            margin-bottom: 36px;
+            padding-bottom: 32px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .hero h1 {
+            font-family: var(--serif);
+            font-size: 38px;
+            font-weight: 300;
+            font-style: italic;
+            letter-spacing: -0.03em;
+            color: var(--text-primary);
+            line-height: 1.1;
+            margin-bottom: 8px;
+        }
+
+        .hero h1 em {
+            font-style: normal;
+            color: var(--accent);
+        }
+
+        .hero p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 300;
+        }
+
+        /* Search */
+        .search-area {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 32px;
+            align-items: center;
+        }
+
+        .search-input-wrap {
+            flex: 1;
+            position: relative;
+        }
+
+        .search-prefix {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text-muted);
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .search-input-wrap input {
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 14px 12px 42px;
+            font-size: 14px;
+            font-family: var(--mono);
+            color: var(--text-primary);
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .search-input-wrap input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .search-input-wrap input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .btn-search {
+            background: var(--accent);
+            color: #0d1117;
+            border: none;
+            border-radius: 8px;
+            padding: 12px 22px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: var(--sans);
+            cursor: pointer;
+            transition: opacity 0.15s, transform 0.1s;
+            white-space: nowrap;
+            letter-spacing: 0.01em;
+        }
+
+        .btn-search:hover { opacity: 0.88; }
+        .btn-search:active { transform: scale(0.98); }
+        .btn-search:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Error */
+        .error-message {
+            display: none;
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid rgba(248, 81, 73, 0.3);
+            color: var(--red);
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            font-family: var(--mono);
+        }
+
+        /* Loader */
+        .loading {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-bottom: 24px;
+        }
+
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Results meta */
+        .results-meta {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-family: var(--mono);
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        /* Document list */
+        .document-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .empty-state .empty-icon {
+            font-size: 36px;
+            margin-bottom: 12px;
+            opacity: 0.4;
+        }
+
+        /* Document card */
+        .document-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            animation: fadeSlideIn 0.3s ease both;
+        }
+
+        @keyframes fadeSlideIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .document-card:hover {
+            border-color: var(--border);
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .card-title-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1.3;
+        }
+
+        .card-id {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .status-badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            flex-shrink: 0;
+            background: var(--green-dim);
+            color: var(--green);
+            border: 1px solid rgba(63, 185, 80, 0.2);
+        }
+
+        /* Card meta grid */
+        .card-meta {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0;
+            padding: 0 20px;
+        }
+
+        .meta-item {
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .meta-item:nth-child(odd) {
+            padding-right: 20px;
+            border-right: 1px solid var(--border-subtle);
+        }
+
+        .meta-label {
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 3px;
+        }
+
+        .meta-value {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-family: var(--mono);
+        }
+
+        /* Card actions */
+        .card-actions {
+            display: flex;
+            gap: 8px;
+            padding: 14px 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            padding: 7px 14px;
+            font-size: 12px;
+            border-radius: 6px;
+            font-family: var(--sans);
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-ghost:hover {
+            background: var(--surface-2);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-ghost.active {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* Expandable panels */
+        .panel {
+            display: none;
+            border-top: 1px solid var(--border-subtle);
+            background: var(--bg);
+        }
+
+        .panel.open { display: block; }
+
+        /* JSON viewer */
+        .json-panel pre {
+            padding: 16px 20px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: #8b949e;
+            white-space: pre-wrap;
+            word-break: break-all;
+            overflow-x: auto;
+            line-height: 1.6;
+        }
+
+        /* Binary / attachment viewer */
+        .attach-panel {
+            padding: 16px 20px;
+        }
+
+        .attach-loading {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-muted);
+            font-family: var(--mono);
+        }
+
+        .attach-content {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            max-height: 400px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        .attach-content::-webkit-scrollbar {
+            width: 6px;
+        }
+        .attach-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .attach-content::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        .attach-content-label {
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            position: sticky;
+            top: 0;
+            background: var(--surface);
+            padding-bottom: 8px;
+        }
+
+        .attach-content-label::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-subtle);
+        }
+
+        .attach-text {
+            font-size: 14px;
+            color: var(--text-primary);
+            line-height: 1.8;
+            font-family: var(--sans);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .attach-pre {
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-all;
+            line-height: 1.6;
+        }
+
+        .attach-error {
+            color: var(--red);
+            font-family: var(--mono);
+            font-size: 12px;
+        }
+
+        .btn-decode {
+            background: linear-gradient(135deg, #2d3a4a, #1e2d3d);
+            color: var(--accent);
+            border: 1px solid rgba(88, 166, 255, 0.35);
+            padding: 4px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: var(--sans);
+            border-radius: 20px;
+            cursor: pointer;
+            letter-spacing: 0.03em;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .btn-decode:hover {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        .btn-decode:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Iframe for HTML content */
+        .attach-panel iframe {
+            width: 100%;
+            height: 300px;
+            border: none;
+            border-radius: 6px;
+            background: white;
+        }
+
+        /* Image content */
+        .attach-panel img {
+            max-width: 100%;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="topbar">
+        <div class="topbar-icon">🏥</div>
+        <div class="topbar-title">DocumentReference Viewer</div>
+        <div class="topbar-badge">Epic FHIR Sandbox</div>
+    </div>
+
+    <div class="main">
+        <div class="hero">
+            <h1>Clinical <em>Documents</em><br>& Notes</h1>
+            <p>Fetch and read patient records directly from the Epic EHR FHIR API</p>
+        </div>
+
+        <div class="search-area">
+            <div class="search-input-wrap">
+                <span class="search-prefix">ID →</span>
+                <input type="text" id="patientId" placeholder="eq081-VQEgP8wR7l5F-0Bwg3" onkeypress="handleEnter(event)">
+            </div>
+            <button class="btn-search" id="searchBtn" onclick="searchDocuments()">Search Records</button>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+        <div class="loading" id="loader">
+            <div class="spinner"></div>
+            <span>Fetching documents from Epic FHIR API…</span>
+        </div>
+
+        <div class="results-meta" id="resultsMeta"></div>
+        <div class="document-list" id="documentList">
+            <div class="empty-state">
+                <div class="empty-icon">📂</div>
+                Enter a Patient ID to view their clinical documents
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function handleEnter(e) {
+            if (e.key === 'Enter') searchDocuments();
+        }
+
+        async function searchDocuments() {
+            const patientId = document.getElementById('patientId').value.trim();
+            if (!patientId) return;
+
+            const loader = document.getElementById('loader');
+            const documentList = document.getElementById('documentList');
+            const searchBtn = document.getElementById('searchBtn');
+            const errorMsg = document.getElementById('errorMessage');
+            const resultsMeta = document.getElementById('resultsMeta');
+
+            loader.style.display = 'flex';
+            documentList.innerHTML = '';
+            errorMsg.style.display = 'none';
+            resultsMeta.style.display = 'none';
+            searchBtn.disabled = true;
+
+            try {
+                const response = await fetch(`/epic/documents?patientId=${encodeURIComponent(patientId)}`);
+                const data = await response.json();
+
+                if (!response.ok) throw new Error(data.detail || 'Failed to fetch documents');
+
+                if (data.resourceType === 'Bundle' && data.entry && data.entry.length > 0) {
+                    const count = data.entry.filter(e => e.resource?.resourceType === 'DocumentReference').length;
+                    resultsMeta.textContent = `${count} document${count !== 1 ? 's' : ''} found`;
+                    resultsMeta.style.display = 'block';
+                    renderDocuments(data.entry);
+                } else {
+                    documentList.innerHTML = '<div class="empty-state"><div class="empty-icon">🔍</div>No documents found for this patient.</div>';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                errorMsg.textContent = '⚠ ' + error.message;
+                errorMsg.style.display = 'block';
+                documentList.innerHTML = '';
+            } finally {
+                loader.style.display = 'none';
+                searchBtn.disabled = false;
+            }
+        }
+
+        function renderDocuments(entries) {
+            const documentList = document.getElementById('documentList');
+            documentList.innerHTML = '';
+
+            entries.forEach((entry, index) => {
+                const doc = entry.resource;
+                if (doc.resourceType !== 'DocumentReference') return;
+
+                const card = document.createElement('div');
+                card.className = 'document-card';
+                card.style.animationDelay = `${index * 0.05}s`;
+
+                const dateStr = doc.date ? new Date(doc.date).toLocaleString() : 'N/A';
+                let title = doc.type?.text || doc.type?.coding?.[0]?.display || 'Document Reference';
+                let categoryStr = doc.category?.[0]?.coding?.[0]?.display || doc.category?.[0]?.coding?.[0]?.code || 'N/A';
+                let authorStr = doc.author?.[0]?.display || doc.author?.[0]?.reference || 'N/A';
+
+                // Build attachment buttons
+                let attachmentHTML = '';
+                if (doc.content && doc.content.length > 0) {
+                    doc.content.forEach((contentItem, cIdx) => {
+                        const attachment = contentItem.attachment;
+                        if (!attachment) return;
+                        const panelId = `attach-panel-${index}-${cIdx}`;
+
+                        if (attachment.data) {
+                            attachmentHTML += `
+                                <button class="btn-ghost" id="btn-${panelId}" onclick="toggleEmbedded('${panelId}', '${attachment.data}', '${attachment.contentType || 'text/plain'}', this)">
+                                    📎 View Embedded Content
+                                </button>
+                                <div class="panel" id="${panelId}">
+                                    <div class="attach-panel"></div>
+                                </div>`;
+                        } else if (attachment.url) {
+                            let binaryId = attachment.url.replace('Binary/', '');
+                            attachmentHTML += `
+                                <button class="btn-ghost" id="btn-${panelId}" onclick="toggleBinary('${panelId}', '${binaryId}', this)">
+                                    📥 Fetch Binary File
+                                </button>
+                                <div class="panel" id="${panelId}">
+                                    <div class="attach-panel"></div>
+                                </div>`;
+                        }
+                    });
+                }
+
+                const jsonPanelId = `json-panel-${index}`;
+                card.innerHTML = `
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <div class="card-title">${title}</div>
+                            <div class="card-id">${doc.id}</div>
+                        </div>
+                        <div class="status-badge">${doc.status || 'unknown'}</div>
+                    </div>
+                    <div class="card-meta">
+                        <div class="meta-item">
+                            <div class="meta-label">Date</div>
+                            <div class="meta-value">${dateStr}</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">Category</div>
+                            <div class="meta-value">${categoryStr}</div>
+                        </div>
+                        <div class="meta-item" style="border-bottom:none;">
+                            <div class="meta-label">Author</div>
+                            <div class="meta-value">${authorStr}</div>
+                        </div>
+                        <div class="meta-item" style="border-bottom:none;">
+                            <div class="meta-label">Resource Type</div>
+                            <div class="meta-value">${doc.resourceType}</div>
+                        </div>
+                    </div>
+                    <div class="card-actions">
+                        <button class="btn-ghost" id="btn-${jsonPanelId}" onclick="toggleJSON('${jsonPanelId}', this)">
+                            ⚙ Raw JSON
+                        </button>
+                        ${attachmentHTML}
+                    </div>
+                    <div class="panel json-panel" id="${jsonPanelId}">
+                        <pre>${JSON.stringify(doc, null, 2)}</pre>
+                    </div>
+                `;
+
+                documentList.appendChild(card);
+            });
+        }
+
+        function toggleJSON(panelId, btn) {
+            const panel = document.getElementById(panelId);
+            const isOpen = panel.classList.toggle('open');
+            btn.classList.toggle('active', isOpen);
+            btn.textContent = isOpen ? '✕ Close JSON' : '⚙ Raw JSON';
+        }
+
+        // ── Strip RTF control sequences → plain text ─────────────────────────────
+        function stripRtf(rtf) {
+            // Remove RTF groups like {\fonttbl...}, {\colortbl...}, {\*\...}
+            let text = rtf.replace(/\{\\[^{}]*\}/g, '');
+            // Remove all remaining { } braces
+            text = text.replace(/[{}]/g, '');
+            // Remove RTF control words (e.g. \pard, \plain, \fs22, \lang1033)
+            text = text.replace(/\\[a-z*]+[-]?\d*[ ]?/gi, '');
+            // Remove RTF control symbols
+            text = text.replace(/\\'/g, "'");
+            // Collapse excessive whitespace / newlines
+            text = text.replace(/\r\n|\r|\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+            return text || null;
+        }
+
+        // ── Decode base64 → detect format → return plain text ────────────────────
+        function decodeBase64ToText(b64, contentType) {
+            let decoded;
+            try {
+                // Handle unicode properly
+                const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+            } catch (e) {
+                try { decoded = atob(b64); } catch { return null; }
+            }
+
+            const ct = (contentType || '').toLowerCase();
+
+            // RTF
+            if (ct.includes('rtf') || decoded.trimStart().startsWith('{\\rtf')) {
+                return stripRtf(decoded);
+            }
+
+            // HTML — strip tags
+            if (ct.includes('html') || decoded.trimStart().startsWith('<')) {
+                const tmp = document.createElement('div');
+                tmp.innerHTML = decoded;
+                return (tmp.innerText || tmp.textContent || '').trim() || null;
+            }
+
+            // Plain text / XML / anything else — return as-is
+            return decoded.trim() || null;
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        // ── Render decoded plain text ─────────────────────────────────────────────
+        function renderDecodedText(container, text) {
+            container.innerHTML = `
+                <div class="attach-content">
+                    <div class="attach-content-label">✅ Decoded Content</div>
+                    <div class="attach-text">${escapeHtml(text)}</div>
+                </div>`;
+        }
+
+        // ── Render raw JSON + optional decode button ──────────────────────────────
+        function renderRawWithDecodeBtn(container, data) {
+            const hasData = !!data.data;
+            const decodeId = 'decode-' + Math.random().toString(36).slice(2);
+
+            // Build display copy: truncate long data field so it doesn't flood the view
+            const displayData = Object.assign({}, data);
+            if (displayData.data && displayData.data.length > 80) {
+                displayData.data = displayData.data.slice(0, 80) + '... [truncated - click Decode to read]';
+            }
+            const label = data.resourceType ? 'Raw Response — ' + data.resourceType : 'Raw Response';
+
+            container.innerHTML = `
+                <div class="attach-content">
+                    <div class="attach-content-label" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                        <span>${label}</span>
+                        ${hasData ? `<button class="btn-decode" id="${decodeId}" onclick="manualDecode('${decodeId}', this)">✨ Decode data</button>` : ''}
+                    </div>
+                    <pre class="attach-pre">${escapeHtml(JSON.stringify(displayData, null, 2))}</pre>
+                </div>`;
+
+            // Store raw data payload on the button for retrieval
+            if (hasData) {
+                const btn = document.getElementById(decodeId);
+                btn._b64 = data.data;
+                btn._ct  = data.contentType || '';
+            }
+        }
+
+        // ── Manual decode triggered by user clicking "Decode data" ───────────────
+        function manualDecode(btnId, btn) {
+            const b64 = btn._b64;
+            const ct  = btn._ct;
+
+            if (!b64) {
+                btn.textContent = '⚠ No data';
+                return;
+            }
+
+            btn.textContent = 'Decoding…';
+            btn.disabled = true;
+
+            try {
+                const plainText = decodeBase64ToText(b64, ct);
+                if (plainText !== null && plainText.trim() !== '') {
+                    // Replace the entire attach-content with decoded view + a "Show raw" toggle
+                    const attachContent = btn.closest('.attach-content');
+                    attachContent.innerHTML = `
+                        <div class="attach-content-label" style="justify-content:space-between;">
+                            <span>✅ Decoded Content <span style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0;">(${escapeHtml(ct || 'auto')})</span></span>
+                        </div>
+                        <div class="attach-text">${escapeHtml(plainText)}</div>`;
+                } else {
+                    btn.textContent = '⚠ Could not decode';
+                    btn.disabled = false;
+                }
+            } catch(e) {
+                btn.textContent = '⚠ Error';
+                btn.disabled = false;
+            }
+        }
+
+        // ── Embedded base64 data (from attachment.data) ──────────────────────────
+        function toggleEmbedded(panelId, base64Data, contentType, btn) {
+            const panel = document.getElementById(panelId);
+            const isOpen = panel.classList.toggle('open');
+            btn.classList.toggle('active', isOpen);
+            btn.textContent = isOpen ? '✕ Close Content' : '📎 View Embedded Content';
+
+            if (!isOpen) return;
+
+            const container = panel.querySelector('.attach-panel');
+
+            if (contentType.includes('image')) {
+                container.innerHTML = `<div class="attach-content"><img src="data:${contentType};base64,${base64Data}" style="max-width:100%;border-radius:6px;"></div>`;
+                return;
+            }
+
+            // Show raw base64 + decode button
+            const fakeData = { data: base64Data, contentType: contentType };
+            renderRawWithDecodeBtn(container, fakeData);
+        }
+
+        // ── Binary file (fetched from /epic/binary/:id) ──────────────────────────
+        async function toggleBinary(panelId, binaryId, btn) {
+            const panel = document.getElementById(panelId);
+            const isOpen = panel.classList.toggle('open');
+            btn.classList.toggle('active', isOpen);
+
+            if (!isOpen) {
+                btn.textContent = '📥 Fetch Binary File';
+                return;
+            }
+
+            btn.textContent = '✕ Close Content';
+
+            const container = panel.querySelector('.attach-panel');
+            container.innerHTML = `
+                <div class="attach-loading">
+                    <div class="spinner"></div>
+                    <span>Loading binary resource…</span>
+                </div>`;
+
+            try {
+                const response = await fetch(`/epic/binary/${binaryId}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}: Failed to fetch binary`);
+
+                // Always read as text first, then try to JSON.parse regardless of content-type header
+                const rawText = await response.text();
+
+                let data = null;
+                try { data = JSON.parse(rawText); } catch (_) { /* not JSON */ }
+
+                if (data && typeof data === 'object') {
+                    // It's JSON — show formatted + decode button if data field present
+                    renderRawWithDecodeBtn(container, data);
+                } else {
+                    // Pure text response — show with decode button in case it's base64
+                    const looksLikeBase64 = /^[A-Za-z0-9+/\r\n]+=*$/.test(rawText.trim()) && rawText.trim().length > 20;
+                    if (looksLikeBase64) {
+                        const fakeData = { data: rawText.trim(), contentType: '' };
+                        renderRawWithDecodeBtn(container, fakeData);
+                    } else {
+                        container.innerHTML = `
+                            <div class="attach-content">
+                                <div class="attach-content-label">Content</div>
+                                <div class="attach-text">${escapeHtml(rawText)}</div>
+                            </div>`;
+                    }
+                }
+            } catch (error) {
+                container.innerHTML = `<div class="attach-error">⚠ ${error.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

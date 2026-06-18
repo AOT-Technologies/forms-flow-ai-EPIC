@@ -23,16 +23,17 @@ def require_auth(f):
             logger.warning("Missing X-Auth-Token header")
             return jsonify({"error": "Authentication token missing"}), 401
 
+        logger.debug(f"Received token: {token[:5]}... (len: {len(token)})")
+        logger.debug(f"Expected secret: {secret_key[:5]}... (len: {len(secret_key if secret_key else '')})")
+
         try:
+            # Check for raw match (fallback for simple POC clients like BPM plugin)
+            if token == secret_key:
+                return f(*args, **kwargs)
+
             fernet = Fernet(secret_key)
             # Decrypt the token
-            decrypted_data = fernet.decrypt(token.encode(), ttl=60) # 60 seconds TTL
-            # Note: fernet.decrypt with ttl=60 handles the timestamp check automatically 
-            # if we encrypted the timestamp or just use the default fernet behavior 
-            # which includes a timestamp in the token.
-            
-            # To be even more explicit, we can check a custom payload too if we wanted,
-            # but Fernet's built-in TTL is very robust for this use case.
+            fernet.decrypt(token.encode(), ttl=60) # 60 seconds TTL
             
             return f(*args, **kwargs)
         except Exception as e:

@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     ports:
       - '3322:3322'   # gRPC
-      - '8080:8080'   # REST API / Web Console
+      - '8081:8080'   # REST API / Web Console
       - '9497:9497'   # Metrics
     volumes:
       - immudb-data:/var/lib/immudb

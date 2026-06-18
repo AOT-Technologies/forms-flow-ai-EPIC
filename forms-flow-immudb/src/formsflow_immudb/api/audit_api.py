@@ -185,6 +185,7 @@ def query_audit_logs():
         tenant_id = request.args.get('tenant_id', '').strip()
         event_name = request.args.get('event_name', '').strip()
         user_id = request.args.get('user_id', '').strip()
+        surrogate_key = request.args.get('surrogate_key', '').strip()
         date_from = request.args.get('date_from', '').strip()
         date_to = request.args.get('date_to', '').strip()
         
@@ -205,6 +206,7 @@ def query_audit_logs():
             tenant_id=tenant_id if tenant_id else None,
             event_name=event_name if event_name else None,
             user_id=user_id if user_id else None,
+            surrogate_key=surrogate_key if surrogate_key else None,
             date_from=date_from if date_from else None,
             date_to=date_to if date_to else None,
             limit=limit,
@@ -212,6 +214,8 @@ def query_audit_logs():
         )
         
         # Format results
+        # Row order: id, tenant_id, event_name, user_id, surrogate_key,
+        #            request_data, response_data, created_at
         formatted_results = []
         for row in results:
             formatted_results.append({
@@ -219,9 +223,11 @@ def query_audit_logs():
                 'tenant_id': row[1],
                 'event_name': row[2],
                 'user_id': row[3],
-                'request_data': row[4],
-                'response_data': row[5],
-                'created_at': row[6]
+                'surrogate_key': row[4],
+                'request_data': row[5],
+                'response_data': row[6],
+                'indexed_json': row[7],
+                'created_at': row[8]
             })
         
         return jsonify({
@@ -244,6 +250,42 @@ def search_audit_logs():
     This is an alias for query_audit_logs with the same functionality.
     """
     return query_audit_logs()
+
+
+@audit_bp.route('/audit/surrogate-key', methods=['GET'])
+@require_auth
+def get_surrogate_key_for_application():
+    """Get the surrogateKey UUID for a given application_id.
+
+    Used by the formsflow-api immudb_audit decorator on events like
+    update_application, where the Camunda payload doesn't carry surrogateKey.
+    The decorator calls this endpoint to retrieve the UUID that was stored
+    in the create_application audit log for the same application.
+
+    Query parameters:
+        application_id: Integer application ID to look up (required)
+
+    Returns:
+        JSON: { "surrogate_key": "<uuid or empty string>" }
+    """
+    try:
+        raw = request.args.get('application_id', '').strip()
+        if not raw:
+            return jsonify({'error': 'application_id is required'}), 400
+
+        try:
+            application_id = int(raw)
+        except ValueError:
+            return jsonify({'error': 'application_id must be an integer'}), 400
+
+        service = ImmudbService.get_instance()
+        sk = service.get_surrogate_key_for_application(application_id)
+
+        return jsonify({'surrogate_key': sk or ''}), 200
+
+    except Exception as e:
+        logger.error(f"Error in get_surrogate_key_for_application: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 
 @audit_bp.route('/health', methods=['GET'])

@@ -62,12 +62,12 @@ docker build \
   -f forms-flow-web-root-config/Dockerfile \
   --build-arg NODE_ENV=production \
   --build-arg MF_FORMSFLOW_WEB_URL="/mf/forms-flow-web.js" \
-  --build-arg MF_FORMSFLOW_NAV_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-nav@v8.0.0-alpha/forms-flow-nav.gz.js" \
-  --build-arg MF_FORMSFLOW_SERVICE_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-service@v8.0.0-alpha/forms-flow-service.gz.js" \
-  --build-arg MF_FORMSFLOW_COMPONENTS_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-components@v8.0.0-alpha/forms-flow-components.gz.js" \
-  --build-arg MF_FORMSFLOW_ADMIN_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-admin@v8.0.0-alpha/forms-flow-admin.gz.js" \
-  --build-arg MF_FORMSFLOW_REVIEW_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-review@v8.0.0-alpha/forms-flow-review.gz.js" \
-  --build-arg MF_FORMSFLOW_SUBMISSIONS_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-submissions@v8.0.0-alpha/forms-flow-submissions.gz.js" \
+  --build-arg MF_FORMSFLOW_NAV_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-nav@v8.1.0-alpha/forms-flow-nav.gz.js" \
+  --build-arg MF_FORMSFLOW_SERVICE_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-service@v8.1.0-alpha/forms-flow-service.gz.js" \
+  --build-arg MF_FORMSFLOW_COMPONENTS_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-components@v8.1.0-alpha/forms-flow-components.gz.js" \
+  --build-arg MF_FORMSFLOW_ADMIN_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-admin@v8.1.0-alpha/forms-flow-admin.gz.js" \
+  --build-arg MF_FORMSFLOW_REVIEW_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-review@v8.1.0-alpha/forms-flow-review.gz.js" \
+  --build-arg MF_FORMSFLOW_SUBMISSIONS_URL="https://forms-flow-microfrontends.aot-technologies.com/forms-flow-submissions@v8.1.0-alpha/forms-flow-submissions.gz.js" \
   -t forms-flow-epic-web-root:qa-latest .
 ```
 
