@@ -501,7 +501,7 @@ def submit_form_details(token: str, data: dict, task_id: str, form_id: str) -> t
         return {'error': 'submit_failed', 'message': str(e)}, 500
 
 
-def resend_magic_link(email: str) -> dict:
+def resend_magic_link(email: str) -> tuple[dict, int]:
     """
     Find original process_instance_id for the email and issue a new magic link.
     """
@@ -514,13 +514,14 @@ def resend_magic_link(email: str) -> dict:
     if not existing_record:
         return {'error': 'no_history', 'message': 'No previous magic link found for this email.'}, 404
 
-    return request_magic_link(
+    res = request_magic_link(
         email,
         process_instance_id=existing_record['process_instance_id'],
         iss=existing_record.get('iss'),
         aud=existing_record.get('aud'),
         token_expiry=existing_record.get('token_expiry'),
     )
+    return res, 200
 
 
 def revoke_token(token: str) -> tuple[dict, int]:

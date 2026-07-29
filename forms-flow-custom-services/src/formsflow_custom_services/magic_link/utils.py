@@ -197,7 +197,7 @@ def token_required(f):
                 return {'message': 'Token audience is not valid for this service.'}, 401
 
             # Token is valid!
-            return f(*args, **kwargs)
+            pass
 
         except Exception as e:
             current_app.logger.error(f"Unexpected error during token validation: {str(e)}")
@@ -205,5 +205,7 @@ def token_required(f):
                 'message': 'Internal server error during authentication.',
                 'error': str(e)
             }, 500
+
+        return f(*args, **kwargs)
             
     return decorated

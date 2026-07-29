@@ -203,10 +203,10 @@ class TestFormsFlowIntegration:
         responses.add(responses.PUT, f"{config['FORMIO_DEFAULT_PROJECT_URL']}/form/f1/submission/507f1f77bcf86cd799439012",
                       json={'status': 'updated'}, status=200)
 
-        responses.add(responses.POST, f"{config['BPM_API_URL']}/engine-rest-ext/v1/process-instance/p1/variables",
+        responses.add(responses.POST, f"{config['BPM_API_URL']}/engine-rest-ext/process-instance/p1/variables",
                       status=204)
 
-        responses.add(responses.POST, f"{config['BPM_API_URL']}/engine-rest-ext/v1/task/t1/submit-form",
+        responses.add(responses.POST, f"{config['BPM_API_URL']}/engine-rest-ext/task/t1/submit-form",
                       status=204)
 
         # 3. Call Endpoint

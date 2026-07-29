@@ -156,7 +156,9 @@ class ResendMagicLink(Resource):
         if not email:
             ns.abort(400, error='missing_field', message='Email is required.')
 
-        result = service.resend_magic_link(email)
+        result, status_code = service.resend_magic_link(email)
+        if status_code != 200:
+            ns.abort(status_code, **result)
         return result, 200
 
 
