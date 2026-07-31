@@ -1,1 +1,2 @@
 com.formsflow.idm.authenticator.ConfigurableIdpAuthenticatorFactory
+com.formsflow.idm.authenticator.EpicLaunchAssertionAuthenticatorFactory

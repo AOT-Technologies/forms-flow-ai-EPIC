@@ -18,6 +18,9 @@ import {
   LANGUAGE,
 } from "../constants/constants";
 import { KeycloakService, StorageService } from "@formsflow/service";
+import Keycloak from "keycloak-js";
+import { getKeycloakHandoffConfig } from "../integrations/ehr/config";
+import { HANDOFF_NOT_APPLICABLE_KEY } from "../integrations/ehr/keycloakHandoff";
 import {
   setUserAuth,
   setUserRole,
@@ -60,6 +63,83 @@ export const kcServiceInstance = (tenantId = null) => {
     KEYCLOAK_REALM,
     tenantId ? `${tenantId}-${Keycloak_Client}` : Keycloak_Client
   );
+};
+
+const EPIC_ACCESS_TOKEN_KEY = "epic_kc_access_token";
+const EPIC_REFRESH_TOKEN_KEY = "epic_kc_refresh_token";
+const EPIC_ID_TOKEN_KEY = "epic_kc_id_token";
+
+/**
+ * Adopts a completed EHR-launch Keycloak session (tokens stashed by
+ * epic-callback.html) as a real, authenticated session for this app -
+ * without going through KeycloakService.initKeycloak(), which would call
+ * its own keycloak-js .init() against the CURRENT page URL. On an
+ * EHR-launched page that URL still carries the SMART flow's own leftover
+ * `code`/`state` (from Epic/the sandbox), and keycloak-js has no way to
+ * tell that isn't its own OAuth callback - it sends it to Keycloak's token
+ * endpoint, gets rejected, and the whole init() rejects with no fallback.
+ *
+ * Returns null (no-op) if no completed handoff is waiting in sessionStorage
+ * - the caller should then skip initKeycloak() entirely rather than risk
+ * that same collision, and simply wait for the next page load (post-handoff)
+ * to try again.
+ */
+const adoptEpicSession = async () => {
+  const accessToken = sessionStorage.getItem(EPIC_ACCESS_TOKEN_KEY);
+  if (!accessToken) {
+    return null;
+  }
+
+  const refreshToken = sessionStorage.getItem(EPIC_REFRESH_TOKEN_KEY);
+  const idToken = sessionStorage.getItem(EPIC_ID_TOKEN_KEY);
+  sessionStorage.removeItem(EPIC_ACCESS_TOKEN_KEY);
+  sessionStorage.removeItem(EPIC_REFRESH_TOKEN_KEY);
+  sessionStorage.removeItem(EPIC_ID_TOKEN_KEY);
+
+  const { clientId } = getKeycloakHandoffConfig();
+  const kc = new Keycloak({
+    url: KEYCLOAK_AUTH_URL,
+    realm: KEYCLOAK_REALM,
+    clientId,
+  });
+
+  let authenticated;
+  try {
+    authenticated = await kc.init({
+      token: accessToken,
+      refreshToken,
+      idToken,
+      pkceMethod: "S256",
+      checkLoginIframe: false,
+    });
+  } catch (e) {
+    console.error("Failed to adopt Epic-launched Keycloak session", e);
+    return null;
+  }
+  if (!authenticated) {
+    return null;
+  }
+
+  // Route access (permissions.js) is gated on the flat client-role claim
+  // (create_submissions, view_tasks, etc.) that the realm's custom mapper
+  // writes as `role` - not realm_access.roles, which only ever holds
+  // realm-level roles like epic-patient/offline_access and would make every
+  // ReviewerRoute/ClientRoute check fail regardless of granted client roles.
+  const roles = kc.tokenParsed?.roles || kc.tokenParsed?.role || kc.tokenParsed?.client_roles || [];
+  StorageService.save(StorageService.User.USER_ROLE, JSON.stringify(roles));
+  StorageService.save(StorageService.User.AUTH_TOKEN, kc.token);
+
+  const userData = await kc.loadUserInfo().catch(() => kc.tokenParsed);
+  StorageService.save(StorageService.User.USER_DETAILS, JSON.stringify(userData));
+
+  return {
+    getToken: () => kc.token,
+    isAuthenticated: () => true,
+    getUserData: () => userData,
+    userData,
+    userLogout: () => kc.logout(),
+    tokenParsed: kc.tokenParsed,
+  };
 };
 
 const setApiBaseUrlToLocalStorage = () => {
@@ -155,14 +235,73 @@ const PrivateRoute = React.memo((props) => {
       if (kcInstance) {
         authenticate(kcInstance, props.store);
       } else {
-        instance.initKeycloak((authenticated) => {
-          if (!authenticated) {
-            setAuthError(true);
-          } else {
-            publish("FF_AUTH", instance);
-            authenticate(instance, props.store);
-          }
-        });
+        const urlParams = new URLSearchParams(window.location.search);
+        const isEHR = urlParams.get("isEHR") === "true" || urlParams.get("isEHR") === "";
+
+        const fallBackToNormalLogin = () => {
+          // Don't call this for the leftover code/state still on the URL
+          // mid patient-handoff - see adoptEpicSession()'s doc comment for
+          // why that collides. By the time we get here, either the launch
+          // was determined not to be a patient at all, or we've waited long
+          // enough that there's nothing left to adopt.
+          instance.initKeycloak((authenticated) => {
+            if (!authenticated) {
+              setAuthError(true);
+            } else {
+              publish("FF_AUTH", instance);
+              authenticate(instance, props.store);
+            }
+          });
+        };
+
+        if (isEHR) {
+          // A Provider (or other non-patient) EHR launch deliberately skips
+          // the Epic->Keycloak handoff (see keycloakHandoff.js) and never
+          // redirects anywhere - so this can't just wait for a handoff that
+          // is never coming. Poll briefly for either a completed patient
+          // handoff or that explicit skip signal, then fall back to the
+          // normal login screen either way once time's up.
+          const ADOPT_RETRY_MS = 500;
+          const ADOPT_MAX_ATTEMPTS = 10;
+          const tryAdopt = (attemptsLeft) => {
+            adoptEpicSession().then((epicInstance) => {
+              if (epicInstance) {
+                publish("FF_AUTH", epicInstance);
+                authenticate(epicInstance, props.store);
+                return;
+              }
+              const notApplicable = sessionStorage.getItem(HANDOFF_NOT_APPLICABLE_KEY) === "true";
+              if (notApplicable) {
+                // Non-patient (Provider, etc) EHR launch. instance.initKeycloak()
+                // hardcodes onLoad:"check-sso" (see @formsflow/service), which
+                // would silently adopt whatever Keycloak session already
+                // happens to be sitting in this browser - a different
+                // patient's, a stale staff session - rather than requiring
+                // this user's own credentials. keycloak-js's own .login()
+                // requires .init() to have already run at least once (it
+                // throws reading internal endpoint state otherwise), so run
+                // the existing check-sso init first, then force a real
+                // username/password challenge in its callback regardless of
+                // what check-sso silently found. Stripping isEHR from the
+                // redirect URI means the return trip is an ordinary staff
+                // visit, completed by the normal (non-EHR) path below exactly
+                // as it already is today.
+                const redirectUri = window.location.origin + window.location.pathname;
+                instance.initKeycloak(() => {
+                  instance.kc.login({ prompt: "login", redirectUri });
+                });
+              } else if (attemptsLeft <= 0) {
+                fallBackToNormalLogin();
+              } else {
+                setTimeout(() => tryAdopt(attemptsLeft - 1), ADOPT_RETRY_MS);
+              }
+            });
+          };
+          tryAdopt(ADOPT_MAX_ATTEMPTS);
+          return;
+        }
+
+        fallBackToNormalLogin();
       }
     }
   }, [props.store, kcInstance, tenantId]);

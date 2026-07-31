@@ -1,5 +1,6 @@
 import { launchSMART, getPatient, fetchPatientData } from "./service";
 import { debugError, debugLog } from "./config";
+import { completeKeycloakHandoff } from "./keycloakHandoff";
 
 /**
  * Send consent document to Epic FHIR server
@@ -108,15 +109,26 @@ async function initializeSMART() {
       return null;
     }
 
-    // Get configuration from window or environment
+    // Get configuration from window or environment. REACT_APP_EPIC_* falls
+    // back to REACT_APP_SMART_* (the ones actually configured in
+    // deployment/docker/.env, also used by launch.html/config.js) rather
+    // than a separate hardcoded default - two parallel, differently-named
+    // config surfaces for the same SMART app was leaving this path
+    // unconfigured even though the "real" one was set.
     const clientId =
       window._env_?.REACT_APP_EPIC_CLIENT_ID ||
-      process.env.REACT_APP_EPIC_CLIENT_ID;
+      process.env.REACT_APP_EPIC_CLIENT_ID ||
+      window._env_?.REACT_APP_SMART_CLIENT_ID ||
+      process.env.REACT_APP_SMART_CLIENT_ID;
     let redirectUri =
       window._env_?.REACT_APP_EPIC_REDIRECT_URI ||
-      process.env.REACT_APP_EPIC_REDIRECT_URI;
+      process.env.REACT_APP_EPIC_REDIRECT_URI ||
+      window._env_?.REACT_APP_SMART_REDIRECT_URI ||
+      process.env.REACT_APP_SMART_REDIRECT_URI;
     const defaultScope =
-      "launch patient/Patient.read patient/Observation.read";
+      window._env_?.REACT_APP_SMART_SCOPE ||
+      process.env.REACT_APP_SMART_SCOPE ||
+      "openid fhirUser launch patient/Patient.read patient/Observation.read";
     const scope =
       window._env_?.REACT_APP_EPIC_SCOPE ||
       process.env.REACT_APP_EPIC_SCOPE ||
@@ -147,6 +159,13 @@ async function initializeSMART() {
         "SMART client initialized successfully",
         { patientId: client.patient?.id }
       );
+
+      // Trade the completed Epic login for a real formsflow session - see
+      // keycloakHandoff.js. This redirects the browser away on success, so
+      // nothing after it on this page load will run in that case.
+      completeKeycloakHandoff(client).catch((err) => {
+        debugError("Keycloak handoff failed", err);
+      });
     }
 
     return client;

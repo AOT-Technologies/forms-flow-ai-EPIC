@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Completing sign-in...</title>
+  <!-- Load config.js to get environment variables -->
+  <script src="/config/config.js"></script>
+</head>
+<body>
+  <div style="display: flex; justify-content: center; align-items: center; height: 100vh;">
+    <div>
+      <h2>Completing sign-in...</h2>
+      <p>Please wait, you'll be returned to your form shortly.</p>
+    </div>
+  </div>
+  <script>
+    // Completes the Keycloak leg of an EHR-launched session
+    // (see keycloakHandoff.js). Kept as a separate, dedicated static page -
+    // rather than landing back on the same page the SMART launch used -
+    // so this code/state pair can never be confused with the Epic OAuth
+    // code/state that service.js is watching for on the original page.
+    (async function () {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      const state = params.get('state');
+      const error = params.get('error');
+
+      const expectedState = sessionStorage.getItem('epic_kc_state');
+      const codeVerifier = sessionStorage.getItem('epic_kc_code_verifier');
+      const returnTo = sessionStorage.getItem('epic_kc_return_to') || '/';
+
+      function cleanupAndReturn(errorMessage) {
+        if (errorMessage) {
+          console.error('Epic -> Keycloak callback failed:', errorMessage);
+        }
+        sessionStorage.removeItem('epic_kc_code_verifier');
+        sessionStorage.removeItem('epic_kc_state');
+        sessionStorage.removeItem('epic_kc_return_to');
+        window.location.href = returnTo;
+      }
+
+      if (error) {
+        cleanupAndReturn(error);
+        return;
+      }
+      if (!code || !state || !codeVerifier || state !== expectedState) {
+        cleanupAndReturn('Missing or mismatched code/state - possible tampering, expired session, or a stale tab');
+        return;
+      }
+
+      const realmUrl = (window._env_ && window._env_.REACT_APP_KEYCLOAK_EPIC_REALM_URL) || '';
+      const clientId = (window._env_ && window._env_.REACT_APP_KEYCLOAK_EPIC_CLIENT_ID) || 'formsflow-epic-web';
+
+      if (!realmUrl) {
+        cleanupAndReturn('REACT_APP_KEYCLOAK_EPIC_REALM_URL is not configured');
+        return;
+      }
+
+      try {
+        const tokenResponse = await fetch(`${realmUrl.replace(/\/+$/, '')}/protocol/openid-connect/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: clientId,
+            code: code,
+            redirect_uri: window.location.origin + '/epic-callback.html',
+            code_verifier: codeVerifier,
+          }),
+        });
+
+        if (!tokenResponse.ok) {
+          cleanupAndReturn(`Token exchange failed: HTTP ${tokenResponse.status}`);
+          return;
+        }
+
+        const tokens = await tokenResponse.json();
+
+        // Handed off via sessionStorage; UserService.js's consumeEpicKeycloakSession()
+        // picks these up on the app's next load and feeds them into a
+        // Keycloak-js instance via init({ token, refreshToken, idToken })
+        // instead of repeating the redirect dance.
+        sessionStorage.setItem('epic_kc_access_token', tokens.access_token || '');
+        sessionStorage.setItem('epic_kc_refresh_token', tokens.refresh_token || '');
+        sessionStorage.setItem('epic_kc_id_token', tokens.id_token || '');
+
+        cleanupAndReturn();
+      } catch (e) {
+        cleanupAndReturn(e.message);
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,8 +1,10 @@
 from fastapi import FastAPI, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from src.services.epic_service import EpicService
+from src.services.launch_service import LaunchService, LaunchExchangeError
 from src.config import get_settings
 from pydantic import BaseModel
 from typing import Optional, List, Union
@@ -15,6 +17,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="EHR Connector API")
 
+# /epic/launch/exchange (and the FHIR viewer's other /epic/* routes) are
+# called directly from the browser (keycloakHandoff.js), a different origin
+# than this API - without CORS headers the browser silently blocks the
+# request client-side ("TypeError: Failed to fetch"), before it ever shows
+# up as a meaningful error in ehr_connectors' own logs.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
     body = await request.body()
@@ -25,6 +39,13 @@ async def validation_exception_handler(request, exc):
     )
 
 epic_service = EpicService()
+launch_service = LaunchService()
+
+class LaunchExchangeRequest(BaseModel):
+    id_token: str
+    access_token: str
+    iss: str
+    patient_id: str
 
 class ApprovalRequest(BaseModel):
     patientId: str
@@ -59,6 +80,33 @@ class ObservationRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.post("/epic/launch/exchange")
+async def epic_launch_exchange(request: LaunchExchangeRequest):
+    """
+    Verify an Epic-issued id_token from the interactive patient/provider
+    EHR-launch flow, and mint a short-lived internal assertion that
+    Keycloak's EpicLaunchAssertionAuthenticator can independently verify.
+
+    This is what lets an EHR-launched patient end up with a real formsflow
+    session without ever seeing a Keycloak login screen or holding a
+    password - every step here is a cryptographic signature check, either
+    Epic's (the id_token) or ours (the assertion this returns).
+    """
+    try:
+        assertion = await launch_service.exchange(
+            id_token=request.id_token,
+            access_token=request.access_token,
+            iss=request.iss,
+            patient_id=request.patient_id,
+        )
+        return {"assertion": assertion}
+    except LaunchExchangeError as e:
+        logger.warning(f"Launch exchange rejected: {e}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error during launch exchange: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Launch exchange failed")
 
 @app.post("/epic/approve")
 async def approve_to_epic(request: ApprovalRequest):
