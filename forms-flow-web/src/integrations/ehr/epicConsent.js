@@ -28,7 +28,9 @@ export async function sendConsentDocumentToEpic(submissionData) {
     client.patient?.id || client.state?.tokenResponse?.patient;
 
   if (!patientId) {
-    throw new Error("No patient in SMART context. Patient ID could not be extracted from SMART client.");
+    throw new Error(
+      "No patient in SMART context. Patient ID could not be extracted from SMART client."
+    );
   }
 
   const approvedAt = submission.approvedAt || new Date().toISOString();
@@ -150,7 +152,38 @@ async function initializeSMART() {
 
     // Launch SMART client
     debugLog("Initializing SMART client", { clientId });
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG initializeSMART calling launchSMART", { t: Date.now() });
     const client = await launchSMART(clientId, redirectUri, scope);
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG initializeSMART launchSMART resolved", {
+      t: Date.now(), hasClient: !!client, resourceType: client?.user?.resourceType,
+      patientId: client?.patient?.id, hasTokenResponse: !!client?.state?.tokenResponse,
+    });
+
+    // The URL at this point still carries the SMART/Epic OAuth flow's own
+    // leftover `code`/`state`/`iss`/`launch` params (needed above for
+    // launchSMART/fhirclient's own token exchange, which just completed).
+    // If anything later on this page calls instance.initKeycloak() - the
+    // isEHR poll loop's own fallback/notApplicable paths do exactly this -
+    // keycloak-js's init() inspects the current URL for its OWN OAuth
+    // callback and, finding a `code`/`state` pair it didn't issue, tries to
+    // redeem it at Keycloak's token endpoint anyway. That fails, and
+    // keycloak-js's recovery from that is to kick off a fresh top-level
+    // login redirect - landing on a plain login screen, looking identical
+    // to (and easily mistaken for) the check-sso/silentCheckSsoFallback
+    // behavior this file's other comments describe. Stripping the SMART
+    // params now, once they've served their purpose, removes the URL-based
+    // trigger for that collision for every code path that runs afterward.
+    if (typeof window !== "undefined" && window.history?.replaceState) {
+      const cleanUrl = new URL(window.location.href);
+      ["code", "state", "iss", "launch"].forEach((p) => cleanUrl.searchParams.delete(p));
+      window.history.replaceState({}, "", cleanUrl.toString());
+      // eslint-disable-next-line no-console
+      console.error("EHR-DEBUG initializeSMART stripped SMART params from URL", {
+        t: Date.now(), cleanUrl: cleanUrl.toString(),
+      });
+    }
 
     // Store client on window for use by other components
     if (client) {

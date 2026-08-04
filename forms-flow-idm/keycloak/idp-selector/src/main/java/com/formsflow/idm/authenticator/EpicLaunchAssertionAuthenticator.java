@@ -308,30 +308,35 @@ public class EpicLaunchAssertionAuthenticator implements Authenticator {
 			// viewDashboards) doesn't show Access Denied for this flow.
 			grantClientRoleIfExists(realm, user, "forms-flow-web", "view_tasks", username);
 			grantClientRoleIfExists(realm, user, "forms-flow-web", "manage_tasks", username);
+			// view_tasks/manage_tasks only satisfy the Tasks *page's* own
+			// route gate - the actual task list is populated via a separate
+			// call to forms-flow-api's GET /filter/user, which is gated by
+			// its own @auth.has_one_of_roles([MANAGE_ALL_FILTERS,
+			// VIEW_FILTERS]) decorator. Without this, that call 401s for
+			// every Epic patient, the filter list never loads, and the
+			// Tasks page silently falls back to an empty/default state -
+			// independent of anything on the BPMN or Camunda side.
+			grantClientRoleIfExists(realm, user, "forms-flow-web", "view_filters", username);
 		}
+
+		// Re-established per user request after removing it during the task-
+		// visibility investigation: kept as a plain group membership only -
+		// nothing in the BPMN references it as a candidateGroups value, so it
+		// has no bearing on task assignment/visibility (that's driven purely
+		// by assignee, via the orQueries filter fix) or on the SSO handoff.
+		joinGroupIfExists(session, realm, user, "epic-patient", username);
 
 		user.setSingleAttribute("patientId", patientId);
 		if (fhirUser != null) {
 			user.setSingleAttribute("fhirUser", fhirUser);
 		}
 
-		// Camunda's currentUserGroups() (KeycloakAuthenticationFilter) only
-		// ever reads the token's top-level "groups" claim, which Keycloak
-		// only populates from real Group membership - a realm/client ROLE
-		// (granted above) never appears there. Without this, the patient's
-		// assigned task is invisible on their Tasks page: the BPMN's
-		// candidateGroups can never match anything in their token. Run this
-		// on every login (not just creation) so a user provisioned before
-		// this change also gets fixed on their next login.
-		joinGroupIfExists(context.getSession(), realm, user, "epic-patient", username);
-
 		return user;
 	}
 
 	/**
-	 * Joins the user to a top-level-or-nested Keycloak Group matched by
-	 * simple name (assumed unique within the realm - true for our own
-	 * "epic-patient" group). No-ops if the group doesn't exist yet or the
+	 * Joins the user to a Keycloak Group matched by simple name (assumed
+	 * unique within the realm). No-ops if the group doesn't exist yet or the
 	 * user is already a member.
 	 */
 	private void joinGroupIfExists(KeycloakSession session, RealmModel realm, UserModel user, String groupName,

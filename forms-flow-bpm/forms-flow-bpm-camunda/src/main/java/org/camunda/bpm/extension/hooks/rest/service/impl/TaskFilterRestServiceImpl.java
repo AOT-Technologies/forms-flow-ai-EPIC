@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.camunda.bpm.engine.ProcessEngine;
+import org.camunda.bpm.engine.ProcessEngineException;
 import org.camunda.bpm.engine.filter.FilterQuery;
 import org.camunda.bpm.engine.impl.VariableInstanceQueryImpl;
 import org.camunda.bpm.engine.impl.persistence.entity.VariableInstanceEntity;
@@ -75,7 +76,7 @@ public class TaskFilterRestServiceImpl implements TaskFilterRestService {
         objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         filterQuery.getCriteria().setObjectMapper(objectMapper);
         Map<String, Object> dataMap = new HashMap<>();
-        TaskQuery query = filterQuery.getCriteria().toQuery(processEngine);
+        TaskQuery query = (TaskQuery) toQuerySafely(filterQuery.getCriteria());
         dataMap.put("name", filterQuery.getName());
         dataMap.put("id", filterQuery.getId());
         dataMap.put("count", query.count());
@@ -168,7 +169,37 @@ public class TaskFilterRestServiceImpl implements TaskFilterRestService {
     private Query<?, ?> executeFilterQuery(org.camunda.bpm.engine.rest.dto.task.TaskQueryDto extendingQuery) throws JsonProcessingException {
         objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         extendingQuery.setObjectMapper(objectMapper);
-        return extendingQuery.toQuery(processEngine);
+        return toQuerySafely(extendingQuery);
+    }
+
+    /**
+     * Epic (and other EHR-launched) patients authenticate with a "role"
+     * claim but no Keycloak "groups" claim, so KeycloakAuthenticationFilter's
+     * currentUserGroups() resolves to an empty list for them. An orQueries
+     * criteria of [assignee OR candidateGroups] (see filter.py's default
+     * "All Tasks" criteria) evaluates candidateGroupsExpression against that
+     * empty list, and Camunda's engine rejects an empty candidate-group list
+     * outright (ProcessEngineException: "Candidate group list is empty"),
+     * failing the WHOLE query rather than just skipping that clause - so a
+     * patient with an assignee-matching task still saw zero results. Since
+     * assignee alone is the only clause that can still match here, fall back
+     * to an assignee-only query for the current user rather than erroring.
+     */
+    private Query<?, ?> toQuerySafely(org.camunda.bpm.engine.rest.dto.task.TaskQueryDto extendingQuery) {
+        try {
+            return extendingQuery.toQuery(processEngine);
+        } catch (ProcessEngineException e) {
+            if (e.getMessage() == null || !e.getMessage().contains("Candidate group list is empty")) {
+                throw e;
+            }
+            String currentUser = processEngine.getIdentityService().getCurrentAuthentication() != null
+                    ? processEngine.getIdentityService().getCurrentAuthentication().getUserId() : null;
+            if (currentUser != null) {
+                LOGGER.warn("Empty candidate group list for user {}, falling back to assignee-only task query", currentUser);
+                return processEngine.getTaskService().createTaskQuery().taskAssignee(currentUser);
+            }
+            throw e;
+        }
     }
 
     private void embedVariableValuesInHalTask(HalTask halTask, Map<String, List<VariableInstance>> variableInstances) {

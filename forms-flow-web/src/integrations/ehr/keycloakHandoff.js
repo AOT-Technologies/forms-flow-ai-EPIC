@@ -60,6 +60,8 @@ export async function completeKeycloakHandoff(client) {
     // identity here; anyone else falls through to the normal Keycloak
     // username/password login this page would otherwise show.
     const userType = client?.user?.resourceType || null;
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG completeKeycloakHandoff entry", { t: Date.now(), userType });
     if (userType && userType !== 'Patient') {
       debugLog(`Keycloak handoff skipped: launch fhirUser is a ${userType}, not a Patient`);
       sessionStorage.setItem(HANDOFF_NOT_APPLICABLE_KEY, 'true');
@@ -73,6 +75,14 @@ export async function completeKeycloakHandoff(client) {
     const patientId = client?.patient?.id || tokenResponse.patient;
 
     if (!idToken || !accessToken || !iss || !patientId) {
+      // eslint-disable-next-line no-console
+      console.error("EHR-DEBUG completeKeycloakHandoff missing fields", {
+        t: Date.now(),
+        hasIdToken: !!idToken,
+        hasAccessToken: !!accessToken,
+        hasIss: !!iss,
+        hasPatientId: !!patientId,
+      });
       debugLog(
         'Keycloak handoff skipped: missing id_token/access_token/iss/patient - ' +
         'was "openid fhirUser" included in the SMART scope and granted by Epic?'
@@ -81,6 +91,10 @@ export async function completeKeycloakHandoff(client) {
     }
 
     if (sessionStorage.getItem(HANDOFF_DONE_KEY) === patientId) {
+      // eslint-disable-next-line no-console
+      console.error("EHR-DEBUG completeKeycloakHandoff already done for patient", {
+        t: Date.now(), patientId,
+      });
       debugLog('Keycloak handoff already completed this session for this patient');
       return false;
     }
@@ -94,6 +108,8 @@ export async function completeKeycloakHandoff(client) {
       return false;
     }
 
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG completeKeycloakHandoff starting exchange fetch", { t: Date.now() });
     const exchangeResponse = await fetch(`${ehrConnectorUrl}/epic/launch/exchange`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -103,6 +119,10 @@ export async function completeKeycloakHandoff(client) {
         iss,
         patient_id: patientId,
       }),
+    });
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG completeKeycloakHandoff exchange fetch resolved", {
+      t: Date.now(), status: exchangeResponse.status,
     });
 
     if (!exchangeResponse.ok) {
@@ -152,6 +172,10 @@ export async function completeKeycloakHandoff(client) {
     // login request is backed by a verified Epic launch, without a password.
     authUrl.searchParams.set('epic_assertion', assertion);
 
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG completeKeycloakHandoff redirecting with epic_assertion", {
+      t: Date.now(),
+    });
     window.location.href = authUrl.toString();
     return true;
   } catch (error) {

@@ -86,6 +86,8 @@ const EPIC_ID_TOKEN_KEY = "epic_kc_id_token";
  */
 const adoptEpicSession = async () => {
   const accessToken = sessionStorage.getItem(EPIC_ACCESS_TOKEN_KEY);
+  // eslint-disable-next-line no-console
+  console.error("EHR-DEBUG adoptEpicSession", { t: Date.now(), hasAccessToken: !!accessToken });
   if (!accessToken) {
     return null;
   }
@@ -150,6 +152,20 @@ const setApiBaseUrlToLocalStorage = () => {
   localStorage.setItem("customApiUrl", WEB_BASE_CUSTOM_URL);
   localStorage.setItem("customSubmissionUrl", CUSTOM_SUBMISSION_URL);
 };
+
+// Module-scoped (not component state) so it survives re-renders of
+// PrivateRoute and guarantees the isEHR handoff/poll cycle in
+// keycloakInitialize() only ever starts once per page load. Without this,
+// any re-render that re-fires the mounting useEffect (e.g. props.store or
+// dispatch not being referentially stable) would kick off a second,
+// overlapping tryAdopt/fallBackToNormalLogin cycle - and since
+// instance.initKeycloak() hardcodes keycloak-js's check-sso (which itself
+// defaults silentCheckSsoFallback to true, redirecting the whole page if
+// the browser can't confirm the hidden iframe has third-party storage
+// access - see keycloakHandoff.js's doc comment for the full mechanism),
+// a second, unguarded invocation could call that before the first one's
+// own poll loop ever gets a chance to complete the real Epic handoff.
+let ehrHandoffCycleStarted = false;
 
 const PrivateRoute = React.memo((props) => {
   const { publish, subscribe, getKcInstance } = props;
@@ -237,13 +253,59 @@ const PrivateRoute = React.memo((props) => {
       } else {
         const urlParams = new URLSearchParams(window.location.search);
         const isEHR = urlParams.get("isEHR") === "true" || urlParams.get("isEHR") === "";
+        // Breadcrumb trail that survives cross-origin navigation (unlike
+        // sessionStorage/console output, which are per-origin/per-tab-state
+        // and get lost or filtered once Keycloak's login redirect lands on
+        // a different origin) - read back afterwards via window.name on
+        // whatever page this trail ends up on, to see exactly what this
+        // component actually did leading up to the redirect.
+        window.name = (window.name || "") +
+          `|BC:init:${Date.now()}:search=${window.location.search}`;
+
+        // eslint-disable-next-line no-console
+        console.error("EHR-DEBUG keycloakInitialize entry", {
+          t: Date.now(), isEHR, search: window.location.search,
+          notApplicable: sessionStorage.getItem(HANDOFF_NOT_APPLICABLE_KEY),
+          handoffDone: sessionStorage.getItem("epic_keycloak_handoff_patient"),
+        });
+
+        // KeycloakService.initKeycloak() (see @formsflow/service) only ever
+        // invokes ITS OWN callback on the authenticated=true branch - when
+        // check-sso resolves authenticated=false (the normal case for
+        // anyone without an existing Keycloak session, EHR or not) its
+        // internal code runs `console.warn("not authenticated!"); this.login()`
+        // directly and never calls back into us at all. That login() call
+        // uses keycloak-js's default redirectUri (the CURRENT window URL) -
+        // so if this page's URL still carries Epic/SMART's leftover
+        // `code`/`state`/`isEHR` query params (they linger until epicConsent.js's
+        // async launchSMART()-then-strip completes, which is slower than this
+        // synchronous fallback), Keycloak ends up asked to send its own login
+        // callback to a URL still carrying someone else's OAuth code/state.
+        // Stripping those params right before handing off to initKeycloak,
+        // regardless of which internal branch it takes, closes that off.
+        const stripEhrParamsFromUrl = () => {
+          if (typeof window === "undefined" || !window.history?.replaceState) return;
+          const cleanUrl = new URL(window.location.href);
+          ["isEHR", "code", "state", "iss", "launch"].forEach(
+            (p) => cleanUrl.searchParams.delete(p)
+          );
+          window.history.replaceState({}, "", cleanUrl.toString());
+          window.name = (window.name || "") +
+            `|BC:stripped:${Date.now()}:href=${window.location.href}`;
+        };
 
         const fallBackToNormalLogin = () => {
-          // Don't call this for the leftover code/state still on the URL
-          // mid patient-handoff - see adoptEpicSession()'s doc comment for
-          // why that collides. By the time we get here, either the launch
-          // was determined not to be a patient at all, or we've waited long
-          // enough that there's nothing left to adopt.
+          // By the time we get here, either the launch was determined not
+          // to be a patient at all, or we've waited long enough that
+          // there's nothing left to adopt - either way, strip first (see
+          // stripEhrParamsFromUrl's comment above).
+          // eslint-disable-next-line no-console
+          console.error("EHR-DEBUG fallBackToNormalLogin called", { t: Date.now() });
+          window.name = (window.name || "") +
+            `|BC:fallback:${Date.now()}:href=${window.location.href}`;
+          stripEhrParamsFromUrl();
+          window.name = (window.name || "") +
+            `|BC:calling-initKeycloak:${Date.now()}:href=${window.location.href}`;
           instance.initKeycloak((authenticated) => {
             if (!authenticated) {
               setAuthError(true);
@@ -255,22 +317,52 @@ const PrivateRoute = React.memo((props) => {
         };
 
         if (isEHR) {
+          if (ehrHandoffCycleStarted) {
+            // eslint-disable-next-line no-console
+            console.error("EHR-DEBUG keycloakInitialize re-entered isEHR branch, ignoring", { t: Date.now() });
+            return;
+          }
+          ehrHandoffCycleStarted = true;
+          // Stale from an earlier, unrelated launch in this same browser
+          // tab (e.g. a prior Provider EHR Launch test) - sessionStorage
+          // outlives the page load that set it, so without clearing it here
+          // a fresh patient launch would inherit someone else's "not a
+          // patient" verdict and skip straight past the poll below.
+          sessionStorage.removeItem(HANDOFF_NOT_APPLICABLE_KEY);
           // A Provider (or other non-patient) EHR launch deliberately skips
           // the Epic->Keycloak handoff (see keycloakHandoff.js) and never
           // redirects anywhere - so this can't just wait for a handoff that
           // is never coming. Poll briefly for either a completed patient
           // handoff or that explicit skip signal, then fall back to the
           // normal login screen either way once time's up.
+          //
+          // The handoff itself is several sequential network round-trips and
+          // full page loads (app -> ehr_connectors assertion exchange ->
+          // Keycloak epic_assertion verification (incl. a JWKS fetch) ->
+          // epic-callback.html -> Keycloak token exchange -> back to the
+          // app), which can comfortably exceed 5s total, especially under
+          // any load. A too-short window here made this component give up
+          // and fall back to the plain login form while the handoff was
+          // still legitimately in flight (confirmed via ehr_connectors'
+          // access logs showing the exchange succeeding after the fallback
+          // had already fired). 24 x 500ms = 12s gives it realistic room.
           const ADOPT_RETRY_MS = 500;
-          const ADOPT_MAX_ATTEMPTS = 10;
+          const ADOPT_MAX_ATTEMPTS = 24;
           const tryAdopt = (attemptsLeft) => {
             adoptEpicSession().then((epicInstance) => {
+              const notApplicable = sessionStorage.getItem(HANDOFF_NOT_APPLICABLE_KEY) === "true";
+              // eslint-disable-next-line no-console
+              console.error("EHR-DEBUG tryAdopt", {
+                t: Date.now(), attemptsLeft, epicInstanceFound: !!epicInstance, notApplicable,
+              });
+              window.name = (window.name || "") +
+                `|BC:tryAdopt:${Date.now()}:left=${attemptsLeft}` +
+                `:found=${!!epicInstance}:notApplicable=${notApplicable}`;
               if (epicInstance) {
                 publish("FF_AUTH", epicInstance);
                 authenticate(epicInstance, props.store);
                 return;
               }
-              const notApplicable = sessionStorage.getItem(HANDOFF_NOT_APPLICABLE_KEY) === "true";
               if (notApplicable) {
                 // Non-patient (Provider, etc) EHR launch. instance.initKeycloak()
                 // hardcodes onLoad:"check-sso" (see @formsflow/service), which
@@ -287,6 +379,8 @@ const PrivateRoute = React.memo((props) => {
                 // visit, completed by the normal (non-EHR) path below exactly
                 // as it already is today.
                 const redirectUri = window.location.origin + window.location.pathname;
+                window.name = (window.name || "") + `|BC:notApplicableBranch:${Date.now()}`;
+                stripEhrParamsFromUrl();
                 instance.initKeycloak(() => {
                   instance.kc.login({ prompt: "login", redirectUri });
                 });

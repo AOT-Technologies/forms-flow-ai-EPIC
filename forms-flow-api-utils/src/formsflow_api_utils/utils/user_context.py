@@ -23,7 +23,12 @@ class UserContext:  # pylint: disable=too-many-instance-attributes
         self.token_info = token_info
         self._email = token_info.get("email")
         self._roles: list = token_info.get('roles') or token_info.get('role') or token_info.get('client_roles')
-        self._groups: list = token_info.get("groups", None)
+        # Unlike _roles above, this had no fallback at all - a token with no
+        # "groups" claim (e.g. a JIT-provisioned user with no real Keycloak
+        # Group membership, only client roles) left this None, which crashes
+        # any caller that assumes a list (e.g. Filter.find_user_filters
+        # iterating over it directly).
+        self._groups: list = token_info.get("groups") or self._roles or []
 
     @property
     def tenant_key(self) -> str:

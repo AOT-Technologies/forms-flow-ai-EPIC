@@ -288,7 +288,7 @@
           "path": "/formsflow/epic-patient",
           "subGroups": [],
           "attributes": {
-            "description": ["Epic-launched patients - grants task-visibility (candidate group match) for their own assigned consent-review tasks."]
+            "description": ["Epic-launched patients - plain membership only, not referenced as a candidateGroups value on any BPMN task."]
           },
           "realmRoles": [],
           "clientRoles": {
