@@ -14,7 +14,7 @@ defaults:
 
 jobs:
   build-and-push:
-    if: github.repository == 'AOT-Technologies/forms-flow-ai-EPIC'
+    if: github.repository == 'yaseen-aot/forms-flow-ai'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -60,7 +60,7 @@ jobs:
 
   deploy:
     needs: build-and-push
-    if: github.repository == 'AOT-Technologies/forms-flow-ai-EPIC'
+    if: github.repository == 'yaseen-aot/forms-flow-ai'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
