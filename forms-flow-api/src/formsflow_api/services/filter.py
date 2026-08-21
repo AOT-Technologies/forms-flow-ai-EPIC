@@ -89,6 +89,8 @@ class FilterService:
         # ensuring that the tenant-specific 'All Tasks' filter is not deleted by the tenant admin.
         if current_app.config.get("MULTI_TENANCY_ENABLED"):
             all_filters = Filter.find_all_filters()
+            #log here
+            current_app.logger.debug("All filters: %s", all_filters)
             all_tasks_filter = any(
                 (
                     item.name.lower() == "all tasks"
@@ -100,6 +102,8 @@ class FilterService:
                 or (item.name.lower() == "all tasks" and item.tenant == tenant_key)
                 for item in all_filters
             )
+            #log here
+            current_app.logger.debug("All tasks filter: %s", all_tasks_filter)
 
             if not all_tasks_filter:
                 filter_obj = Filter(
@@ -109,8 +113,13 @@ class FilterService:
                     created_by="system",
                     created="now()",
                     criteria={
-                        "candidateGroupsExpression": "${currentUserGroups()}",
-                        "includeAssignedTasks": True,
+                        "orQueries": [
+                            {
+                                "assigneeExpression": "${currentUser()}",
+                                "candidateGroupsExpression": "${currentUserGroups()}",
+                                "includeAssignedTasks": True,
+                            }
+                        ]
                     },
                     users={},
                     roles={},

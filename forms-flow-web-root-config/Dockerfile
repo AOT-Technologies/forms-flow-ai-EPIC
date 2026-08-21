@@ -43,12 +43,12 @@ WORKDIR /forms-flow-web-root-config/app
 # Set build arguments
 ARG NODE_ENV
 ARG MF_FORMSFLOW_WEB_URL=/mf/forms-flow-web.js
-ARG MF_FORMSFLOW_NAV_URL
-ARG MF_FORMSFLOW_SERVICE_URL
-ARG MF_FORMSFLOW_COMPONENTS_URL
-ARG MF_FORMSFLOW_ADMIN_URL
-ARG MF_FORMSFLOW_REVIEW_URL
-ARG MF_FORMSFLOW_SUBMISSIONS_URL
+ARG MF_FORMSFLOW_NAV_URL=https://forms-flow-microfrontends.aot-technologies.com/forms-flow-nav@v8.1.0-alpha/forms-flow-nav.gz.js
+ARG MF_FORMSFLOW_SERVICE_URL=https://forms-flow-microfrontends.aot-technologies.com/forms-flow-service@v8.1.0-alpha/forms-flow-service.gz.js
+ARG MF_FORMSFLOW_COMPONENTS_URL=https://forms-flow-microfrontends.aot-technologies.com/forms-flow-components@v8.1.0-alpha/forms-flow-components.gz.js
+ARG MF_FORMSFLOW_ADMIN_URL=https://forms-flow-microfrontends.aot-technologies.com/forms-flow-admin@v8.1.0-alpha/forms-flow-admin.gz.js
+ARG MF_FORMSFLOW_REVIEW_URL=https://forms-flow-microfrontends.aot-technologies.com/forms-flow-review@v8.1.0-alpha/forms-flow-review.gz.js
+ARG MF_FORMSFLOW_SUBMISSIONS_URL=https://forms-flow-microfrontends.aot-technologies.com/forms-flow-submissions@v8.1.0-alpha/forms-flow-submissions.gz.js
 
 
 # Set environment variables
@@ -141,12 +141,15 @@ COPY forms-flow-web-root-config/nginx.conf /etc/nginx/nginx.conf
 # Expose port
 EXPOSE 8080
 
-# Install necessary packages
+# # Install necessary packages (including gettext for envsubst)
+# RUN apk add --no-cache bash gettext
 RUN apk add --no-cache bash
 
-# Set execute permission for env.sh
+# # Set execute permission for env.sh and fix CRLF line endings
 RUN chmod +x /usr/share/nginx/html/config/env.sh
+# RUN sed -i 's/\r$//' /usr/share/nginx/html/config/env.sh && \
+#     chmod +x /usr/share/nginx/html/config/env.sh
 
 # Start Nginx server with environment setup
-CMD ["/bin/bash", "-c", "nginx -g \"daemon off;\""]
 # CMD ["/bin/bash", "-c", "/usr/share/nginx/html/config/env.sh && nginx -g \"daemon off;\""]
+CMD ["/bin/bash", "-c", "nginx -g \"daemon off;\""]

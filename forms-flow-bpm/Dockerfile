@@ -33,6 +33,8 @@ RUN test ! -d /app && mkdir /app || :
 RUN mkdir -p /app
 COPY sslcom.cer /app/sslcom.cer
 COPY --from=MAVEN_TOOL_CHAIN /tmp/forms-flow-bpm-camunda/target/forms-flow-bpm.jar ./app
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 RUN chmod a+rwx -R /app
 RUN keytool -import -trustcacerts \
     -alias sslcom-cert \
@@ -42,4 +44,4 @@ RUN keytool -import -trustcacerts \
     -noprompt
 WORKDIR /app
 VOLUME /tmp
-ENTRYPOINT ["java","-Djava.security.egd=file:/dev/./urandom", "-Dpolyglot.js.nashorn-compat=true", "-Dpolyglot.engine.WarnInterpreterOnly=false", "-jar","/app/forms-flow-bpm.jar"]
+ENTRYPOINT ["/app/entrypoint.sh"]

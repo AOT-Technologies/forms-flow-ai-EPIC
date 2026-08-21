@@ -1,0 +1,4 @@
+# Private signing keys (generate_keys.py, generate_launch_assertion_key.py) -
+# never commit these, regenerate per environment instead.
+*.pem
+jwks.json

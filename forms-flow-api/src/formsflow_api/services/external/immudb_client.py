@@ -134,9 +134,35 @@ class ImmudbService:
             logger.warning(f"Failed to lookup surrogate key for app {application_id}: {e}")
         return None
 
-# ---------------------------------------------------------------------------
-# 2. immudb_audit Decorator
-# ---------------------------------------------------------------------------
+def _fetch_form_data_from_formio(data):
+    """Parse form_url from data, fetch submission from Form.io, and return the data dict."""
+    if not isinstance(data, dict):
+        return None
+    form_url = data.get("form_url")
+    if not form_url:
+        return None
+    
+    try:
+        import re
+        from formsflow_api_utils.services.external import FormioService
+        
+        # Search for form_id and submission_id in form_url
+        match = re.search(r"/form/([A-Fa-f0-9]{24})/submission/([A-Fa-f0-9]{24})$", form_url)
+        if not match:
+            return None
+        form_id = match.group(1)
+        sub_id = match.group(2)
+        
+        formio_service = FormioService()
+        token = formio_service.get_formio_access_token()
+        payload = {"form_id": form_id, "sub_id": sub_id}
+        submission = formio_service.get_submission(payload, token)
+        if submission and isinstance(submission, dict):
+            return submission.get("data")
+    except Exception as e:
+        logger.warning(f"Failed to fetch submission from Form.io for url {form_url}: {e}")
+    return None
+
 
 def _extract_request_from_args_kwargs(args, kwargs):
     """Extract request data from function arguments."""
@@ -355,6 +381,19 @@ def immudb_audit(event_name: str, index_keys: Iterable[str] | None = None, **kwa
                         audit_req = _inject_surrogate_key(req, sk) if req else req
                         audit_body = _inject_surrogate_key(body, sk)
 
+                        form_data = _fetch_form_data_from_formio(req)
+                        if form_data:
+                            if isinstance(audit_req, dict):
+                                audit_req = dict(audit_req)
+                                audit_req["data"] = form_data
+                                if "patientId" in form_data:
+                                    audit_req["patientId"] = form_data["patientId"]
+                            if isinstance(audit_body, dict):
+                                audit_body = dict(audit_body)
+                                audit_body["data"] = form_data
+                                if "patientId" in form_data:
+                                    audit_body["patientId"] = form_data["patientId"]
+
                         # Log success
                         service.log_event(tenant, event_name, user_id, audit_req, audit_body, _index_keys)
                         return res
@@ -364,6 +403,12 @@ def immudb_audit(event_name: str, index_keys: Iterable[str] | None = None, **kwa
                         if not sk and app_id:
                             sk = service.lookup_surrogate_key(app_id)
                         audit_req = _inject_surrogate_key(req, sk) if req else req
+                        form_data = _fetch_form_data_from_formio(req)
+                        if form_data and isinstance(audit_req, dict):
+                            audit_req = dict(audit_req)
+                            audit_req["data"] = form_data
+                            if "patientId" in form_data:
+                                audit_req["patientId"] = form_data["patientId"]
                         service.log_event(tenant, event_name, user_id, audit_req, {"error": str(exc), "surrogateKey": sk or ""}, _index_keys)
                         raise
                 return async_wrapper
@@ -430,6 +475,19 @@ def immudb_audit(event_name: str, index_keys: Iterable[str] | None = None, **kwa
                     audit_req = _inject_surrogate_key(req, sk) if req else req
                     audit_body = _inject_surrogate_key(body, sk)
 
+                    form_data = _fetch_form_data_from_formio(req)
+                    if form_data:
+                        if isinstance(audit_req, dict):
+                            audit_req = dict(audit_req)
+                            audit_req["data"] = form_data
+                            if "patientId" in form_data:
+                                audit_req["patientId"] = form_data["patientId"]
+                        if isinstance(audit_body, dict):
+                            audit_body = dict(audit_body)
+                            audit_body["data"] = form_data
+                            if "patientId" in form_data:
+                                audit_body["patientId"] = form_data["patientId"]
+
                     # Log success
                     service.log_event(tenant, event_name, user_id, audit_req, audit_body, _index_keys)
                     return res
@@ -439,6 +497,12 @@ def immudb_audit(event_name: str, index_keys: Iterable[str] | None = None, **kwa
                     if not sk and app_id:
                         sk = service.lookup_surrogate_key(app_id)
                     audit_req = _inject_surrogate_key(req, sk) if req else req
+                    form_data = _fetch_form_data_from_formio(req)
+                    if form_data and isinstance(audit_req, dict):
+                        audit_req = dict(audit_req)
+                        audit_req["data"] = form_data
+                        if "patientId" in form_data:
+                            audit_req["patientId"] = form_data["patientId"]
                     service.log_event(tenant, event_name, user_id, audit_req, {"error": str(exc), "surrogateKey": sk or ""}, _index_keys)
                     raise
 

@@ -67,6 +67,10 @@ public class AuditExecutionListener implements ExecutionListener {
                 requestData.put("surrogateKey", execution.getVariable("surrogateKey"));
             }
 
+            if (execution.hasVariable("patientId")) {
+                requestData.put("patientId", execution.getVariable("patientId"));
+            }
+
             if (execution.hasVariable("request")) {
                 requestData.put("connectorRequest", execution.getVariable("request"));
             }
@@ -77,6 +81,10 @@ public class AuditExecutionListener implements ExecutionListener {
             // Add surrogate key for end-to-end traceability
             if (execution.hasVariable("surrogateKey")) {
                 responseData.put("surrogateKey", execution.getVariable("surrogateKey"));
+            }
+
+            if (execution.hasVariable("patientId")) {
+                responseData.put("patientId", execution.getVariable("patientId"));
             }
             
             if (execution.hasVariable("response")) {

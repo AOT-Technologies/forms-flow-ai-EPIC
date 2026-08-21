@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { push } from "connected-react-router";
 import { connect, useDispatch, useSelector } from "react-redux";
 import {
@@ -319,14 +319,6 @@ const View = React.memo((props) => {
     }
   }, [ehrData]);
 
-  // Update form when EHR submission data is available
-  // Note: formRef.current is also checked in formReady callback
-  useEffect(() => {
-    if (ehrSubmission && ehrSubmission.data && formRef.current) {
-      applyEhrDataToForm(formRef.current, ehrSubmission);
-    }
-  }, [ehrSubmission]);
-
   // will be updated once application/draft listing page is ready
   const handleBack = () => {
     navigateToFormEntries(dispatch, tenantKey, parentFormId || formId);
@@ -349,6 +341,40 @@ const View = React.memo((props) => {
       handleBack();
   }
   };
+
+  // Filter submission to ensure no objects are passed to Form.io.
+  // Memoized so the reference is stable across unrelated re-renders -
+  // otherwise Form.io's isEqual guard on its submission-update effect
+  // never matches (this filtered subset vs. its own full live data),
+  // causing it to reassign `submission` on every render in a feedback loop.
+  const formioSubmission = useMemo(() => {
+    const sub = ehrSubmission || submission;
+    if (!sub || !sub.data) return sub;
+    const deepFilter = (obj) => {
+      if (obj === null || obj === undefined) return obj;
+      if (typeof obj === 'object') {
+        const result = {};
+        Object.keys(obj).forEach(k => {
+          const val = obj[k];
+          if (val !== null && val !== undefined) {
+            if (typeof val === 'object') {
+              result[k] = deepFilter(val);
+            } else if (typeof val === 'string') {
+              result[k] = val;
+            } else if (
+              typeof val === 'number' ||
+              typeof val === 'boolean'
+            ) {
+              result[k] = String(val);
+            }
+          }
+        });
+        return result;
+      }
+      return typeof obj === 'string' ? obj : String(obj);
+    };
+    return { ...sub, data: deepFilter(sub.data) };
+  }, [ehrSubmission, submission]);
 
   if (isActive || isPublicStatusLoading || formStatusLoading) {
     return (
@@ -408,23 +434,7 @@ const View = React.memo((props) => {
           {(isPublic || formStatus === "active") ? (
             <Form
               form={form}
-              submission={(() => {
-                // Filter submission to ensure no objects are passed to Form.io
-                const sub = ehrSubmission || submission;
-                if (!sub || !sub.data) return sub;
-                const filteredData = {};
-                Object.keys(sub.data).forEach(key => {
-                  const value = sub.data[key];
-                  // Only include string, number, boolean (convert to string for safety)
-                  if (typeof value === 'string') {
-                    filteredData[key] = value;
-                  } else if (typeof value === 'number' || typeof value === 'boolean') {
-                    filteredData[key] = String(value);
-                  }
-                  // Skip objects, arrays, null, undefined
-                });
-                return { ...sub, data: filteredData };
-              })()}
+              submission={formioSubmission}
               url={url}
               options={{
                 ...options,
@@ -433,18 +443,14 @@ const View = React.memo((props) => {
                 buttonSettings: { showCancel: false },
               }}
               onChange={() => {
-                // Update draftData for auto-save functionality
-                if (formRef.current?.data) {
-                  setDraftData({ data: formRef.current.data });
+                // Update draftData for auto-save functionality only if form data has actually changed
+                const currentData = formRef.current?.data;
+                if (currentData && !isEqual(draftData?.data, currentData)) {
+                  setDraftData({ data: currentData });
                 }
               }}
               formReady={(formInstance) => {
                 formRef.current = formInstance;
-                
-                // Apply EHR submission if available (immediate)
-                if (ehrSubmission && ehrSubmission.data) {
-                  applyEhrDataToForm(formInstance, ehrSubmission);
-                }
               }}
               onSubmit={(data) => {
                 setPoll(false);
@@ -586,47 +592,5 @@ const mapDispatchToProps = (dispatch, ownProps) => {
   };
 };
 
-
-// =============================================================================
-// EHR Integration Helper Functions
-// =============================================================================
-
-/**
- * Helper to apply EHR data to form instance.
- * Updates the form submission data and ensures UI components reflect the changes.
- * 
- * @param {Object} formInstance - The Form.io form instance
- * @param {Object} submissionData - The submission data containing EHR patient data
- */
-const applyEhrDataToForm = (formInstance, submissionData) => {
-  if (!formInstance || !submissionData || !submissionData.data) {
-    return;
-  }
-
-  formInstance.submission = submissionData;
-  
-  // CRITICAL: Set values directly on components to update UI
-  // This is necessary because setting submission directly doesn't always update 
-  // the visual state of all components in some Form.io versions/configurations
-  if (typeof formInstance.getComponent === 'function') {
-    Object.keys(submissionData.data).forEach(key => {
-      const value = submissionData.data[key];
-      // Only set primitive values (string, number, boolean)
-      if (value !== null && value !== undefined && typeof value !== 'object') {
-        const component = formInstance.getComponent(key);
-        if (component) {
-          component.setValue(value, { modified: false });
-        }
-      }
-    });
-    
-    // Trigger form redraw/update if available to ensure UI reflects changes
-    if (typeof formInstance.redraw === 'function') {
-      formInstance.redraw();
-    } else if (typeof formInstance.render === 'function') {
-      formInstance.render();
-    }
-  }
-};
 
 export default connect(mapStateToProps, mapDispatchToProps)(View);

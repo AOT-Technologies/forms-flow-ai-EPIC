@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Patient Consent Form - Patient Portal</title>
+  
+  <!-- Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+  
+  <!-- CSS Dependencies -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/formiojs@4.13.1/dist/formio.full.min.css">
+
+  <style>
+    :root {
+      --primary-color: #3b82f6;
+      --primary-hover: #2563eb;
+      --secondary-hover: #808080;
+      --bg-gradient-start: #0f172a;
+      --bg-gradient-end: #1e1b4b;
+      --card-bg: rgba(30, 41, 59, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-light: #a1a4a6;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
+      min-height: 100vh;
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 2rem 1rem;
+      margin: 0;
+      overflow-x: hidden;
+    }
+
+    /* Glassmorphism Container Card */
+    .portal-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      padding: 3rem;
+      width: 100%;
+      max-width: 850px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: all 0.5s ease;
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .portal-header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    .portal-logo {
+      font-size: 2.5rem;
+      background: linear-gradient(to right, #60a5fa, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+    }
+
+    .portal-logo i {
+      background: linear-gradient(to right, #60a5fa, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .portal-title {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: var(--text-main);
+      margin-top: 0.5rem;
+    }
+
+    .portal-subtitle {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    /* Form.io Overrides for Dark Glass Theme */
+    .formio-form {
+      color: var(--text-main) !important;
+    }
+
+    .formio-form label {
+      color: #cbd5e1 !important;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+    }
+
+    .formio-form input, 
+    .formio-form textarea, 
+    .formio-form select {
+      background-color: rgba(15, 23, 42, 0.6) !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      color: var(--text-main) !important;
+      border-radius: 8px !important;
+      padding: 0.75rem 1rem !important;
+      height: auto !important;
+      transition: all 0.2s ease-in-out !important;
+    }
+
+    .formio-form input:focus, 
+    .formio-form textarea:focus, 
+    .formio-form select:focus {
+      border-color: var(--primary-color) !important;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25) !important;
+      outline: none !important;
+    }
+
+    .formio-form button.btn-primary {
+      background: linear-gradient(135deg, var(--primary-color), #2563eb) !important;
+      border: none !important;
+      border-radius: 8px !important;
+      padding: 0.75rem 2rem !important;
+      font-weight: 600 !important;
+      letter-spacing: 0.025em !important;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
+      transition: all 0.2s ease !important;
+    }
+
+    .formio-form button.btn-primary:hover {
+      transform: translateY(-1px) !important;
+      box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4) !important;
+    }
+
+    .formio-form button.btn-primary:active {
+      transform: translateY(1px) !important;
+    }
+
+    /* States (Loading, Success, Error) */
+    .state-container {
+      display: none;
+      text-align: center;
+      padding: 2rem 0;
+    }
+
+    .state-container.active {
+      display: block;
+    }
+
+    /* Skeleton / Spinner Loader */
+    .loader-spinner {
+      border: 4px solid rgba(255, 255, 255, 0.1);
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      border-left-color: var(--primary-color);
+      animation: spin 1s linear infinite;
+      margin: 0 auto 1.5rem auto;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Animated Success Icon */
+    .success-checkmark {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 1.5rem auto;
+    }
+
+    .success-checkmark .check-icon {
+      width: 80px;
+      height: 80px;
+      position: relative;
+      border-radius: 50%;
+      box-sizing: content-box;
+      border: 4px solid #4caf50;
+    }
+
+    .success-checkmark .check-icon::after {
+      content: '';
+      position: absolute;
+      background: transparent;
+      transform: rotate(45deg);
+      transform-origin: left top;
+    }
+
+    .success-checkmark .check-icon .icon-line {
+      height: 5px;
+      background-color: #4caf50;
+      display: block;
+      border-radius: 2px;
+      position: absolute;
+      z-index: 10;
+    }
+
+    .success-checkmark .check-icon .icon-line.line-tip {
+      top: 46px;
+      left: 14px;
+      width: 25px;
+      transform: rotate(45deg);
+      animation: writeTip 0.4s ease-in-out;
+    }
+
+    .success-checkmark .check-icon .icon-line.line-long {
+      top: 38px;
+      right: 8px;
+      width: 47px;
+      transform: rotate(-45deg);
+      animation: writeLong 0.4s ease-in-out;
+    }
+
+    @keyframes writeTip {
+      0% { width: 0; left: 1px; top: 19px; }
+      100% { width: 25px; left: 14px; top: 46px; }
+    }
+
+    @keyframes writeLong {
+      0% { width: 0; right: 46px; top: 54px; }
+      100% { width: 47px; right: 8px; top: 38px; }
+    }
+
+    .state-title {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .state-message {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    /* Secure Footer */
+    .portal-footer {
+      margin-top: 3rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    .portal-footer i {
+      color: #10b981;
+    }
+
+    /* Alert Banner */
+    .error-banner {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 12px;
+      padding: 1rem;
+      margin-bottom: 2rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      text-align: left;
+    }
+
+    .error-banner i {
+      color: #ef4444;
+      font-size: 1.25rem;
+      margin-top: 0.15rem;
+    }
+
+    .error-banner-content h4 {
+      margin: 0 0 0.25rem 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fca5a5;
+    }
+
+    .error-banner-content p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: #fecaca;
+    }
+
+    /* Formio Card Panels for styling integrity */
+    .card {
+      background: rgba(15, 23, 42, 0.4) !important;
+      border: 1px solid var(--card-border) !important;
+      border-radius: 12px !important;
+      color: var(--text-main) !important;
+    }
+
+    .card-header {
+      background: rgba(255, 255, 255, 0.02) !important;
+      border-bottom: 1px solid var(--card-border) !important;
+      font-weight: 600 !important;
+    }
+
+    .formio-choices, .choices__inner, .choices__list--dropdown {
+      background-color: rgba(15, 23, 42, 0.9) !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      color: var(--text-main) !important;
+      border-radius: 8px !important;
+    }
+
+    .choices__item--selectable {
+      color: var(--text-light) !important;
+    }
+
+    .choices__list--dropdown .choices__item--active {
+      background-color: var(--secondary-hover) !important;
+    }
+
+    .formio-choices, .choices__inner, .choices__list--dropdown {
+      background-color: #0f172ae6 !important;
+    }
+
+    .choices__list--dropdown .choices__item--selectable.is-highlighted {
+      background-color: var(--secondary-hover) !important;
+    }
+
+    .signature-pad-body {
+      background: #ffffff !important;
+      border-radius: 8px !important;
+      border: 1px solid rgba(255, 255, 255, 0.2) !important;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="portal-card">
+    <!-- Portal Header -->
+    <div class="portal-header" id="portalHeader">
+      <div class="portal-logo">
+        <i class="fa-solid fa-hospital-user"></i>
+        <span>formsflow.ai</span>
+      </div>
+      <h1 class="portal-title">Patient Intake Portal</h1>
+      <p class="portal-subtitle">Secure, passwordless consent and forms signature</p>
+    </div>
+
+    <!-- State 1: Loading -->
+    <div class="state-container active" id="stateLoading">
+      <div class="loader-spinner"></div>
+      <h3 class="state-title">Retrieving Consent Form</h3>
+      <p class="state-message">Verifying your secure session link and pulling prefilled details. Please wait a moment...</p>
+    </div>
+
+    <!-- State 2: Form Render Container -->
+    <div id="stateForm" style="display: none;">
+      <div id="formio"></div>
+    </div>
+
+    <!-- State 3: Submitting Progress -->
+    <div class="state-container" id="stateSubmitting">
+      <div class="loader-spinner"></div>
+      <h3 class="state-title">Submitting Signature</h3>
+      <p class="state-message">Securely encrypting your responses and updating your medical records portal. This may take up to a minute...</p>
+    </div>
+
+    <!-- State 4: Success -->
+    <div class="state-container" id="stateSuccess">
+      <div class="success-checkmark">
+        <div class="check-icon">
+          <span class="icon-line line-tip"></span>
+          <span class="icon-line line-long"></span>
+        </div>
+      </div>
+      <h3 class="state-title" style="color: #4caf50;">Consent Signed Successfully</h3>
+      <p class="state-message">Thank you. Your signed patient consent form has been securely recorded and submitted to your healthcare provider. You may now close this window.</p>
+    </div>
+
+    <!-- State 5: Error -->
+    <div class="state-container" id="stateError">
+      <div class="error-banner">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <div class="error-banner-content">
+          <h4 id="errorType">Access Validation Failed</h4>
+          <p id="errorMessage">The magic link token is invalid, expired, or has already been used.</p>
+        </div>
+      </div>
+      <h3 class="state-title" style="color: #ef4444;">Access Denied</h3>
+      <p class="state-message">Please check that the URL matches the link sent to your email, or contact your portal administrator to generate a new verification email.</p>
+    </div>
+
+    <!-- Secure Footer Notice -->
+    <div class="portal-footer">
+      <i class="fa-solid fa-shield-halved"></i>
+      <span>End-to-End Encrypted &bull; HIPAA Compliant Signature</span>
+    </div>
+  </div>
+
+  <!-- JS Dependencies -->
+  <script src="/config/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/formiojs@4.13.1/dist/formio.full.min.js"></script>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // 1. Extract token from query parameters
+      const urlParams = new URLSearchParams(window.location.search);
+      const token = urlParams.get('token');
+
+      // State helpers
+      const setVisibleState = (stateId) => {
+        const states = ['stateLoading', 'stateForm', 'stateSubmitting', 'stateSuccess', 'stateError'];
+        states.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = (id === stateId) ? 'block' : 'none';
+        });
+      };
+
+      if (!token) {
+        document.getElementById('errorType').innerText = 'Missing Access Token';
+        document.getElementById('errorMessage').innerText = 'A valid access token is required to access the patient portal form. Please click the link inside your confirmation email.';
+        setVisibleState('stateError');
+        return;
+      }
+
+      // 2. Resolve custom-services API address
+      const hostname = window.location.hostname;
+      // Use config.js env or default to port 5005 local route
+      const apiBaseUrl = (window._env_ && window._env_.REACT_APP_WEB_BASE_CUSTOM_URL) 
+        || `http://${hostname}:5005/custom-services-api`;
+
+      console.log(`Connecting to Custom Services API at: ${apiBaseUrl}`);
+
+      // Fetch Form schema and prefill values using token
+      const getFormUrl = `${apiBaseUrl}/v1/magic-links/get-form?token=${encodeURIComponent(token)}`;
+
+      fetch(getFormUrl)
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(err => {
+              throw new Error(err.message || 'The magic link is invalid or has expired.');
+            });
+          }
+          return response.json();
+        })
+        .then(data => {
+          if (!data.schema) {
+            throw new Error('Received form details successfully, but no schema was found.');
+          }
+
+          // Adjust page titles based on form details
+          if (data.schema.title) {
+            document.querySelector('.portal-title').innerText = data.schema.title;
+          }
+
+          // 3. Render the form via Formio
+          const formContainer = document.getElementById('formio');
+
+          // Set Form.io base URL so internals don't crash on null projectUrl
+          const formioProjectUrl = (window._env_ && window._env_.REACT_APP_FORMIO_DEFAULT_PROJECT_URL)
+            || `http://${hostname}:3001`;
+          Formio.setProjectUrl(formioProjectUrl);
+          Formio.setBaseUrl(formioProjectUrl);
+          console.log('[magic-link] Formio projectUrl set to:', formioProjectUrl);
+
+          // Deep-log the full schema so we can see every button's action/customAction
+          console.log('[magic-link] Raw schema received:', JSON.stringify(data.schema, null, 2));
+
+          // Walk all components and log any button with a custom function
+          const walkComponents = (components, path) => {
+            (components || []).forEach(c => {
+              if (c.type === 'button') {
+                console.log(`[magic-link] Button found at "${path}/${c.key}": action="${c.action}" customAction=${JSON.stringify(c.customAction)} event="${c.event}"`);
+              }
+              if (c.components) walkComponents(c.components, `${path}/${c.key}`);
+              if (c.columns) c.columns.forEach(col => walkComponents(col.components, `${path}/${c.key}/col`));
+              if (c.rows) c.rows.forEach(row => row.forEach(cell => walkComponents(cell.components, `${path}/${c.key}/row`)));
+            });
+          };
+          walkComponents(data.schema.components, 'root');
+
+          // Sanitise schema: replace custom/url button actions with 'submit'
+          // to prevent Form.io's custom function runner from crashing on
+          // missing projectUrl / groups when there is no authenticated session.
+          const sanitizeButtons = (components) => {
+            (components || []).forEach(c => {
+              if (c.type === 'button') {
+                const originalAction = c.action;
+                const originalCustom = c.customAction;
+                if (c.action === 'custom' || c.action === 'url') {
+                  console.log(`[magic-link] Sanitising button "${c.key}": replacing action="${c.action}" with "submit". Original customAction was:`, c.customAction);
+                  c.action = 'submit';
+                  delete c.customAction;
+                  delete c.custom;
+                  delete c.url;
+                }
+                // Also clear any event-action that runs custom code
+                if (c.action === 'event' && c.event) {
+                  console.log(`[magic-link] Sanitising event button "${c.key}": event="${c.event}" cleared`);
+                  c.action = 'submit';
+                  delete c.event;
+                }
+              }
+              if (c.components) sanitizeButtons(c.components);
+              if (c.columns) c.columns.forEach(col => sanitizeButtons(col.components));
+              if (c.rows) c.rows.forEach(row => row.forEach(cell => sanitizeButtons(cell.components)));
+            });
+          };
+          sanitizeButtons(data.schema.components);
+          console.log('[magic-link] Schema sanitised. Creating form...');
+
+          Formio.createForm(formContainer, data.schema, {
+            readOnly: false,
+            noAlerts: true,
+            hooks: {
+              beforeSubmit: (submission, next) => {
+                console.log('[magic-link] beforeSubmit hook fired. Passing to our handler.');
+                next();
+              }
+            },
+            buttonSettings: {
+              showCancel: false
+            }
+          }).then(form => {
+            console.log('[magic-link] Form created successfully.');
+            // Apply prefilled variables if they exist
+            if (data.prefill) {
+              form.submission = { data: data.prefill };
+            }
+
+            // Hide loading spinner, show active form container
+            setVisibleState('stateForm');
+
+            // 4. Handle submit event
+            form.on('submit', (submission) => {
+              // Transition to submitting/saving state
+              setVisibleState('stateSubmitting');
+
+              const submitPayload = {
+                token: token,
+                data: submission.data,
+                taskId: data.taskId,
+                formId: data.formId
+              };
+
+              const submitUrl = `${apiBaseUrl}/v1/magic-links/submit-form`;
+              fetch(submitUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(submitPayload)
+              })
+              .then(submitRes => {
+                if (!submitRes.ok) {
+                  return submitRes.json().then(err => {
+                    throw new Error(err.message || 'Form submission failed. Please try again.');
+                  });
+                }
+                return submitRes.json();
+              })
+              .then(() => {
+                setVisibleState('stateSuccess');
+              })
+              .catch(err => {
+                document.getElementById('errorType').innerText = 'Submission Failed';
+                document.getElementById('errorMessage').innerText = err.message;
+                setVisibleState('stateError');
+              });
+            });
+          }).catch(err => {
+            throw new Error(`Failed to initialize form rendering: ${err.message}`);
+          });
+        })
+        .catch(err => {
+          document.getElementById('errorType').innerText = 'Access Denied';
+          document.getElementById('errorMessage').innerText = err.message;
+          setVisibleState('stateError');
+        });
+    });
+  </script>
+</body>
+</html>

@@ -9,6 +9,7 @@ from src.formsflow_immudb.app import create_app
 def app():
     """Create test application."""
     app = create_app('testing')
+    app.config['IMMUDB_SECRET_KEY'] = 'test-secret-key-12345'
     yield app
 
 
@@ -38,9 +39,16 @@ def test_root_endpoint(client):
     assert 'endpoints' in data
 
 
+def test_log_audit_event_unauthorized(client):
+    """Test audit log endpoint rejects requests without a valid token."""
+    response = client.post('/api/v1/audit/log', json={})
+    assert response.status_code == 401
+
+
 def test_log_audit_event_missing_data(client):
     """Test audit log with missing data."""
-    response = client.post('/api/v1/audit/log', json={})
+    headers = {"X-Auth-Token": "test-secret-key-12345"}
+    response = client.post('/api/v1/audit/log', json={}, headers=headers)
     assert response.status_code == 400
     
     data = json.loads(response.data)
@@ -49,12 +57,13 @@ def test_log_audit_event_missing_data(client):
 
 def test_log_audit_event_valid(client):
     """Test audit log with valid data."""
+    headers = {"X-Auth-Token": "test-secret-key-12345"}
     payload = {
         'event_name': 'test_event',
         'request_data': {'test': 'request'},
         'response_data': {'test': 'response'}
     }
     
-    response = client.post('/api/v1/audit/log', json=payload)
+    response = client.post('/api/v1/audit/log', json=payload, headers=headers)
     # Will succeed even with ImmuDB disabled in testing
     assert response.status_code in [200, 201]

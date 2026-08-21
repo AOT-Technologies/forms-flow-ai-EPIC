@@ -1,0 +1,109 @@
+name: Deploy ImmuDB Service to EKS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, develop, release/*, poc/docker-build-issue-fix ]
+    paths:
+      - "forms-flow-immudb/**"
+      - "VERSION"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-and-push:
+    if: github.repository == 'AOT-Technologies/forms-flow-ai-EPIC'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          install: true
+
+      # Generate unique version using timestamp (version.YYYYMMDDHHMMSS)
+      - name: Set version
+        id: get_version
+        run: |
+          VER=$(cat VERSION)
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            VER=${VER/-alpha/''}
+          fi
+          TIMESTAMP=$(date +'%Y%m%d%H%M%S')
+          FINAL_VER="${VER}.${TIMESTAMP}"
+          echo "VERSION=${FINAL_VER}" >> $GITHUB_ENV
+          echo "version=${FINAL_VER}" >> $GITHUB_OUTPUT
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+
+      - name: Verify build tags and targets
+        run: |
+          echo "Target version tag: ${{ env.VERSION }}"
+          echo "Image name: docker.io/formsflow/forms-flow-immudb:${{ env.VERSION }}"
+
+      # Build and push ImmuDB Service Image
+      - name: Build and push ImmuDB Service
+        uses: docker/build-push-action@v4
+        with:
+          context: forms-flow-immudb
+          file: forms-flow-immudb/Dockerfile
+          push: true
+          tags: docker.io/formsflow/forms-flow-immudb:${{ env.VERSION }}
+
+  deploy:
+    needs: build-and-push
+    if: github.repository == 'AOT-Technologies/forms-flow-ai-EPIC'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set version
+        run: |
+          echo "VERSION=${{ needs.build-and-push.outputs.version }}" >> $GITHUB_ENV
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_DEPLOYMENT_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_DEPLOYMENT_SECRET_ACCESS_KEY }}
+          aws-region: ca-central-1
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Verify EKS token
+        run: aws eks get-token --cluster-name ${{ secrets.QA_EKS_CLUSTER }}
+
+      - name: Update Kube config
+        run: aws eks update-kubeconfig --region ca-central-1 --name ${{ secrets.QA_EKS_CLUSTER }}
+
+      - name: Verify kubectl
+        run: |
+          kubectl config current-context
+          kubectl get ns
+
+      - name: Deploy ImmuDB Service to EKS
+        run: |
+          echo "Deploying updated ImmuDB Service..."
+          kubectl -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} patch deployment forms-flow-immudb -p '{"spec":{"template":{"spec":{"containers":[{"name":"forms-flow-immudb","image":"docker.io/formsflow/forms-flow-immudb:${{ env.VERSION }}"}]}}}}' || echo "skip"
+          kubectl rollout restart deployment forms-flow-immudb -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} || echo "restart skipped"

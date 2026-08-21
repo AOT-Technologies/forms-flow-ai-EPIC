@@ -2,11 +2,201 @@
 
 import json
 import re
+import os
 from flask import Blueprint, render_template_string, request, jsonify
 from ..services.immudb_service import ImmudbService
 import html
 
 REPORT = Blueprint("report", __name__)
+
+EHR_CONNECTOR_URL = os.getenv("EHR_CONNECTOR_URL", "http://localhost:8002").rstrip("/")
+
+def find_key_value(data, target_keys):
+    """Recursively search for values of target_keys in a dictionary or list."""
+    if isinstance(data, dict):
+        for key in target_keys:
+            if key in data and data[key]:
+                val = data[key]
+                if isinstance(val, (str, int)):
+                    return str(val)
+                elif isinstance(val, dict) and "value" in val and isinstance(val["value"], (str, int)):
+                    return str(val["value"])
+        for value in data.values():
+            found = find_key_value(value, target_keys)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = find_key_value(item, target_keys)
+            if found:
+                return found
+    return None
+
+def extract_patient_id(data):
+    val = find_key_value(data, ["patientId", "patient_id", "patientIdInput"])
+    if val:
+        return val
+    if isinstance(data, dict):
+        patient_ref = None
+        subject = data.get("subject")
+        if isinstance(subject, dict):
+            patient_ref = subject.get("reference")
+        elif not patient_ref:
+            patient_ref = data.get("patient")
+        
+        if isinstance(patient_ref, str):
+            if patient_ref.startswith("Patient/"):
+                return patient_ref.split("/")[-1]
+            return patient_ref
+            
+        for v in data.values():
+            found = extract_patient_id(v)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = extract_patient_id(item)
+            if found:
+                return found
+    return None
+
+def extract_docref_id(data):
+    val = find_key_value(data, ["documentrefId", "docrefId", "documentref_id", "docref_id", "docrefIdInput"])
+    if val:
+        return val
+    if isinstance(data, dict):
+        if data.get("resourceType") == "DocumentReference" and isinstance(data.get("id"), str):
+            return data["id"]
+        for v in data.values():
+            found = extract_docref_id(v)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = extract_docref_id(item)
+            if found:
+                return found
+    return None
+
+def extract_encounter_id(data):
+    val = find_key_value(data, ["encounterId", "encounter_id", "encounterIdInput"])
+    if val:
+        return val
+    if isinstance(data, dict):
+        if data.get("resourceType") == "Encounter" and isinstance(data.get("id"), str):
+            return data["id"]
+        for v in data.values():
+            found = extract_encounter_id(v)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = extract_encounter_id(item)
+            if found:
+                return found
+    return None
+
+def generate_ehr_links_html(req_str, res_str):
+    """Parse request and response payloads, extract IDs, and return HTML links."""
+    req_data = {}
+    res_data = {}
+    
+    if req_str:
+        try:
+            req_data = json.loads(req_str)
+        except Exception:
+            pass
+            
+    if res_str:
+        try:
+            res_data = json.loads(res_str)
+        except Exception:
+            pass
+            
+    # Try to extract via explicitly provided _viewer_links first
+    patient_id = None
+    docref_id = None
+    encounter_id = None
+    
+    def get_links_from_dict(d):
+        if not isinstance(d, dict):
+            return None
+        if "_viewer_links" in d:
+            return d["_viewer_links"]
+        for v in d.values():
+            if isinstance(v, dict):
+                found = get_links_from_dict(v)
+                if found:
+                    return found
+        return None
+        
+    vl = get_links_from_dict(req_data) or get_links_from_dict(res_data)
+    if isinstance(vl, dict):
+        pat_path = vl.get("patient_details")
+        if pat_path and pat_path.startswith("/patient/"):
+            patient_id = pat_path.split("/")[-1]
+            
+        doc_path = vl.get("documentref_details")
+        if doc_path and doc_path.startswith("/documentref/"):
+            docref_id = doc_path.split("/")[-1]
+            
+        enc_path = vl.get("encounter_details")
+        if enc_path and enc_path.startswith("/encounter/"):
+            encounter_id = enc_path.split("/")[-1]
+
+    # Fallback to key-based extraction if not found in _viewer_links
+    if not patient_id:
+        patient_id = extract_patient_id(req_data) or extract_patient_id(res_data)
+    if not docref_id:
+        docref_id = extract_docref_id(req_data) or extract_docref_id(res_data)
+    if not encounter_id:
+        encounter_id = extract_encounter_id(req_data) or extract_encounter_id(res_data)
+    
+    links = []
+    
+    summary_items = []
+    if patient_id:
+        summary_items.append(f'👤 <strong>Patient ID:</strong> {patient_id}')
+    
+    first_name = find_key_value(req_data, ["firstName", "first_name"]) or find_key_value(res_data, ["firstName", "first_name"])
+    last_name = find_key_value(req_data, ["lastName", "last_name"]) or find_key_value(res_data, ["lastName", "last_name"])
+    mrn = find_key_value(req_data, ["medicalRecordNumber", "mrn"]) or find_key_value(res_data, ["medicalRecordNumber", "mrn"])
+    
+    if first_name or last_name:
+        name = " ".join([x for x in (first_name, last_name) if x])
+        summary_items.append(f'📝 <strong>Name:</strong> {name}')
+    if mrn:
+        summary_items.append(f'🔢 <strong>MRN:</strong> {mrn}')
+        
+    if summary_items:
+        summary_html = '<div style="font-size:11px; color:#8b949e; line-height:1.5; margin-bottom:8px; border-bottom:1px solid #30363d; padding-bottom:6px; font-family:inherit;">' + "<br/>".join(summary_items) + '</div>'
+        links.append(summary_html)
+        
+    if patient_id:
+        links.append(
+            f'<a href="{EHR_CONNECTOR_URL}/patient/{patient_id}" target="_blank" class="btn-ehr" style="display:inline-flex; align-items:center; gap:6px; background:#58a6ff; color:#0d1117; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; text-decoration:none; margin:2px;"><i class="fas fa-user-injured"></i> View Patient</a>'
+        )
+        links.append(
+            f'<a href="{EHR_CONNECTOR_URL}/documentref/patient/{patient_id}" target="_blank" class="btn-ehr" style="display:inline-flex; align-items:center; gap:6px; background:#3fb950; color:#0d1117; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; text-decoration:none; margin:2px;"><i class="fas fa-file-medical"></i> Patient Docs</a>'
+        )
+        links.append(
+            f'<a href="{EHR_CONNECTOR_URL}/encounter/patient/{patient_id}" target="_blank" class="btn-ehr" style="display:inline-flex; align-items:center; gap:6px; background:#a371f7; color:#0d1117; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; text-decoration:none; margin:2px;"><i class="fas fa-hospital-user"></i> Patient Encounters</a>'
+        )
+        
+    if docref_id:
+        links.append(
+            f'<a href="{EHR_CONNECTOR_URL}/documentref/{docref_id}" target="_blank" class="btn-ehr" style="display:inline-flex; align-items:center; gap:6px; background:#34d058; color:#0d1117; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; text-decoration:none; margin:2px;"><i class="fas fa-file-alt"></i> View Consent</a>'
+        )
+        
+    if encounter_id:
+        links.append(
+            f'<a href="{EHR_CONNECTOR_URL}/encounter/{encounter_id}" target="_blank" class="btn-ehr" style="display:inline-flex; align-items:center; gap:6px; background:#f97316; color:#0d1117; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:600; text-decoration:none; margin:2px;"><i class="fas fa-notes-medical"></i> View Encounter</a>'
+        )
+        
+    if not links:
+        return '<span style="color:#6e7781; font-style:italic; font-size:11px;">No EHR Data</span>'
+        
+    return '<div style="display:flex; flex-direction:column; gap:4px; max-width:200px;">' + "".join(links) + '</div>'
 
 # HTML template for server-side rendered report page
 REPORT_TEMPLATE = """
@@ -297,6 +487,16 @@ REPORT_TEMPLATE = """
             animation: spin 1s linear infinite;
         }
 
+        .btn-ehr {
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+        .btn-ehr:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 3px 6px rgba(0,0,0,0.25);
+            filter: brightness(0.9);
+        }
+
         .results-header {
             padding: 25px 35px;
             background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
@@ -375,44 +575,142 @@ REPORT_TEMPLATE = """
             background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%);
         }
 
-        .json-preview {
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+        .json-preview-card {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+            color: #764ba2;
+            padding: 8px 16px;
+            border-radius: 20px;
+            border: 1px solid rgba(118, 75, 162, 0.2);
             font-size: 12px;
-            max-width: 350px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            padding: 12px 16px;
-            border-radius: 8px;
-            border: 1px solid #e9ecef;
-            cursor: pointer;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        }
-
-        .json-preview:hover {
-            background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-            border-color: #667eea;
-        }
-
-        .see-more-btn {
-            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-size: 11px;
-            cursor: pointer;
-            margin-left: 10px;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            user-select: none;
+            white-space: nowrap;
+        }
+
+        .json-preview-card:hover {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(118, 75, 162, 0.25);
+            border-color: transparent;
+        }
+
+        .json-preview-card i {
+            font-size: 14px;
+        }
+
+        /* Modal Tabs Styling */
+        .modal-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            padding: 0 24px;
+            margin-top: -16px;
+            margin-bottom: 16px;
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            outline: none;
+            padding: 12px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-bottom: 3px solid transparent;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tab-btn:hover {
+            color: #764ba2;
+        }
+
+        .tab-btn.active {
+            color: #764ba2;
+            border-bottom-color: #764ba2;
+        }
+
+        .tab-pane {
+            display: none;
+        }
+
+        .tab-pane.active-pane {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Summary Table Styling */
+        .summary-table-container {
+            padding: 8px 0;
+            max-height: 450px;
+            overflow-y: auto;
+        }
+
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: inherit;
+            background: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #e9ecef;
+        }
+
+        .summary-table th, .summary-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #f1f3f5;
+        }
+
+        .summary-table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+            width: 35%;
+        }
+
+        .summary-table tr:hover {
+            background-color: #f8f9fa;
+        }
+
+        .summary-table td {
+            color: #212529;
+            word-break: break-all;
+        }
+
+        .summary-badge {
+            background-color: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 11px;
+            display: inline-block;
+        }
+
+        .summary-badge-green {
+            background-color: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 11px;
+            display: inline-block;
+        }
         }
 
         .see-more-btn:hover {
@@ -911,6 +1209,7 @@ REPORT_TEMPLATE = """
                             <th><i class="fas fa-user"></i> User ID</th>
                             <th><i class="fas fa-upload"></i> Request Data</th>
                             <th><i class="fas fa-download"></i> Response Data</th>
+                            <th><i class="fas fa-link"></i> EHR Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -923,24 +1222,25 @@ REPORT_TEMPLATE = """
                                 <td>{{ row[2] or '' }}</td>
                                 <td>{{ row[3] or '' }}</td>
                                 <td>
-                                    <div class="json-preview" onclick="showJsonModal('Request Data', '{{ row[4] | replace('"', '\\"') | replace("'", "\\'") | replace('\n', '\\n') | replace('\r', '\\r') }}')">
-                                        {{ row[4] | safe if row[4] else '' }}
+                                    {% if row[4] %}
+                                    <div class="json-preview-card" onclick="showJsonModal('Request Data', '{{ row[4] | replace('"', '\\"') | replace("'", "\\'") | replace('\n', '\\n') | replace('\r', '\\r') }}')">
+                                        <i class="fas fa-upload icon"></i> <span>View Request</span>
                                     </div>
-                                    {% if row[4] and row[4]|length > 100 %}
-                                    <button class="see-more-btn" onclick="showJsonModal('Request Data', '{{ row[4] | replace('"', '\\"') | replace("'", "\\'") | replace('\n', '\\n') | replace('\r', '\\r') }}')">
-                                        <i class="fas fa-expand"></i> See More
-                                    </button>
+                                    {% else %}
+                                    <span class="badge badge-secondary">No Data</span>
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <div class="json-preview" onclick="showJsonModal('Response Data', '{{ row[5] | replace('"', '\\"') | replace("'", "\\'") | replace('\n', '\\n') | replace('\r', '\\r') }}')">
-                                        {{ row[5] | safe if row[5] else '' }}
+                                    {% if row[5] %}
+                                    <div class="json-preview-card" onclick="showJsonModal('Response Data', '{{ row[5] | replace('"', '\\"') | replace("'", "\\'") | replace('\n', '\\n') | replace('\r', '\\r') }}')">
+                                        <i class="fas fa-download icon"></i> <span>View Response</span>
                                     </div>
-                                    {% if row[5] and row[5]|length > 100 %}
-                                    <button class="see-more-btn" onclick="showJsonModal('Response Data', '{{ row[5] | replace('"', '\\"') | replace("'", "\\'") | replace('\n', '\\n') | replace('\r', '\\r') }}')">
-                                        <i class="fas fa-expand"></i> See More
-                                    </button>
+                                    {% else %}
+                                    <span class="badge badge-secondary">No Data</span>
                                     {% endif %}
+                                </td>
+                                <td>
+                                    {{ row[7] | safe if row[7] else '' }}
                                 </td>
                             </tr>
                             {% endfor %}
@@ -1003,22 +1303,39 @@ REPORT_TEMPLATE = """
                 <h2 id="modalTitle"><i class="fas fa-code"></i> JSON Data</h2>
                 <span class="close" onclick="closeJsonModal()">&times;</span>
             </div>
+            <!-- Tab Navigation -->
+            <div class="modal-tabs">
+                <button id="summaryTabBtn" class="tab-btn active" onclick="switchModalTab(this, 'summaryTab')">
+                    <i class="fas fa-list-ul"></i> Summary
+                </button>
+                <button id="rawJsonTabBtn" class="tab-btn" onclick="switchModalTab(this, 'rawJsonTab')">
+                    <i class="fas fa-code"></i> Raw JSON
+                </button>
+            </div>
             <div class="modal-body">
-                <div class="json-controls">
-                    <button class="copy-btn" onclick="copyJsonToClipboard()">
-                        <i class="fas fa-copy"></i> Copy JSON
-                    </button>
-                    <button class="json-btn" onclick="expandAllJson()">
-                        <i class="fas fa-expand-alt"></i> Expand All
-                    </button>
-                    <button class="json-btn" onclick="collapseAllJson()">
-                        <i class="fas fa-compress-alt"></i> Collapse All
-                    </button>
-                    <button class="json-btn" onclick="formatJson()">
-                        <i class="fas fa-magic"></i> Format
-                    </button>
+                <!-- Summary Tab Pane -->
+                <div id="summaryTab" class="tab-pane active-pane">
+                    <div id="summaryTableContainer" class="summary-table-container"></div>
                 </div>
-                <div id="jsonContent" class="json-tree"></div>
+                
+                <!-- Raw JSON Tab Pane -->
+                <div id="rawJsonTab" class="tab-pane">
+                    <div class="json-controls">
+                        <button class="copy-btn" onclick="copyJsonToClipboard()">
+                            <i class="fas fa-copy"></i> Copy JSON
+                        </button>
+                        <button class="json-btn" onclick="expandAllJson()">
+                            <i class="fas fa-expand-alt"></i> Expand All
+                        </button>
+                        <button class="json-btn" onclick="collapseAllJson()">
+                            <i class="fas fa-compress-alt"></i> Collapse All
+                        </button>
+                        <button class="json-btn" onclick="formatJson()">
+                            <i class="fas fa-magic"></i> Format
+                        </button>
+                    </div>
+                    <div id="jsonContent" class="json-tree"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -1113,25 +1430,19 @@ REPORT_TEMPLATE = """
                 
                 // Helper to generate the JSON cell content
                 const createJsonCell = (displayHtml, type) => {
-                    // displayHtml is already highlighted/escaped from server
                     const content = displayHtml || '';
-                    const hasContent = content.length > 0;
-                    const isLong = content.length > 100;
+                    if (!content || content.trim() === '') {
+                        return '<span class="badge badge-secondary">No Data</span>';
+                    }
                     
-                    // We use the index to reference the raw data in currentApiResults
-                    let cellHtml = `
-                        <div class="json-preview" onclick="showAjaxJsonModal(${index}, '${type}')">
-                            ${content}
+                    const iconClass = type === 'request' ? 'fa-upload' : 'fa-download';
+                    const btnText = type === 'request' ? 'View Request' : 'View Response';
+                    
+                    return `
+                        <div class="json-preview-card" onclick="showAjaxJsonModal(${index}, '${type}')">
+                            <i class="fas ${iconClass} icon"></i> <span>${btnText}</span>
                         </div>
                     `;
-                    
-                    if (hasContent && isLong) {
-                        cellHtml += `
-                        <button class="see-more-btn" onclick="showAjaxJsonModal(${index}, '${type}')">
-                            <i class="fas fa-expand"></i> See More
-                        </button>`;
-                    }
-                    return cellHtml;
                 };
 
                 tr.innerHTML = `
@@ -1142,6 +1453,7 @@ REPORT_TEMPLATE = """
                     <td>${row.user_id || ''}</td>
                     <td>${createJsonCell(row.request_data, 'request')}</td>
                     <td>${createJsonCell(row.response_data, 'response')}</td>
+                    <td>${row.ehr_links_html || ''}</td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -1266,6 +1578,98 @@ REPORT_TEMPLATE = """
             return doc.documentElement.textContent;
         }
 
+        function switchModalTab(btn, paneId) {
+            // Deactivate all tab buttons
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            // Activate clicked button
+            btn.classList.add('active');
+            
+            // Hide all tab panes
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active-pane'));
+            // Show targeted pane
+            document.getElementById(paneId).classList.add('active-pane');
+        }
+
+        function buildSummaryTable(data) {
+            const container = document.getElementById('summaryTableContainer');
+            if (!data) {
+                container.innerHTML = '<div style="color: #6c757d; padding: 20px; text-align: center;">No summary data available.</div>';
+                return;
+            }
+            
+            let flatData = {};
+            
+            function flatten(obj, prefix = '') {
+                if (obj === null) {
+                    flatData[prefix] = null;
+                    return;
+                }
+                if (typeof obj !== 'object') {
+                    flatData[prefix] = obj;
+                    return;
+                }
+                
+                // If it is a Camunda-like variable structure: {"value": X, "type": Y}
+                if (typeof obj === 'object' && 'value' in obj && Object.keys(obj).length <= 3) {
+                    flatData[prefix] = obj.value;
+                    return;
+                }
+                
+                for (let k in obj) {
+                    if (obj.hasOwnProperty(k)) {
+                        let newKey = prefix ? prefix + '.' + k : k;
+                        // Special handling for the main form "data" block
+                        if (k === 'data' && typeof obj[k] === 'object' && obj[k] !== null) {
+                            flatten(obj[k], ''); // Merge form fields at root of summary for readability
+                        } else {
+                            flatten(obj[k], newKey);
+                        }
+                    }
+                }
+            }
+            
+            flatten(data);
+            
+            if (Object.keys(flatData).length === 0) {
+                container.innerHTML = '<div style="color: #6c757d; padding: 20px; text-align: center;">Empty payload.</div>';
+                return;
+            }
+            
+            let html = '<table class="summary-table">';
+            html += '<thead><tr><th>Property Name</th><th>Value</th></tr></thead>';
+            html += '<tbody>';
+            
+            for (let key in flatData) {
+                let val = flatData[key];
+                if (val === undefined || val === null) val = 'null';
+                
+                // Format keys to look human-readable (e.g. firstName -> First Name)
+                let label = key;
+                if (label.includes('.')) {
+                    label = label.split('.').pop();
+                }
+                label = label.replace(/([A-Z])/g, ' $1') // insert spaces before caps
+                             .replace(/^./, str => str.toUpperCase()); // capitalize first letter
+                
+                // Apply badges for specific keys
+                let valHtml = '';
+                if (typeof val === 'boolean') {
+                    valHtml = val ? '<span class="summary-badge-green">True</span>' : '<span class="summary-badge">False</span>';
+                } else if (key.toLowerCase().includes('url') && String(val).startsWith('http')) {
+                    valHtml = `<a href="${val}" target="_blank" style="color: #667eea; text-decoration: underline;">${val}</a>`;
+                } else if (key.toLowerCase().includes('id') || key.toLowerCase().includes('key') || key.toLowerCase().includes('token')) {
+                    valHtml = `<span class="summary-badge">${escapeHtml(String(val))}</span>`;
+                } else {
+                    valHtml = escapeHtml(String(val));
+                }
+                
+                html += `<tr><td><strong>${escapeHtml(label)}</strong></td><td>${valHtml}</td></tr>`;
+            }
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
         // Function used by server-side rendered buttons
         function showJsonModal(title, jsonData) {
             const modal = document.getElementById('jsonModal');
@@ -1278,11 +1682,19 @@ REPORT_TEMPLATE = """
             const unescapedJsonData = unescapeHtml(jsonData);
             currentJsonData = unescapedJsonData;
 
+            // Reset tab navigation state to Summary tab
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('summaryTabBtn').classList.add('active');
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active-pane'));
+            document.getElementById('summaryTab').classList.add('active-pane');
+
             try {
                 const parsedData = JSON.parse(unescapedJsonData);
+                buildSummaryTable(parsedData);
                 jsonContent.innerHTML = renderJsonTree(parsedData);
             } catch (e) {
                 // If parsing fails, display the unescaped string as plain text
+                document.getElementById('summaryTableContainer').innerHTML = '<div style="color: #6c757d; padding: 20px; text-align: center;">Not a valid JSON payload.</div>';
                 jsonContent.innerHTML = '<div class="json-string">' + escapeHtml(unescapedJsonData) + '</div>';
             }
 
@@ -1563,10 +1975,38 @@ def index():
         if search_params['date_to']:
             query += f" AND created_at <= '{search_params['date_to']}'"
 
-        query += " ORDER BY created_at DESC"
-
         try:
-            results = immudb_service.client.sqlQuery(query)
+            import random
+            import time
+            results = None
+            MAX_ATTEMPTS = 3
+            for attempt in range(1, MAX_ATTEMPTS + 1):
+                try:
+                    client = immudb_service._get_client()
+                    if not client:
+                        raise Exception("ImmuDB client is not available")
+                    results = client.sqlQuery(query)
+                    if results:
+                        results.sort(key=lambda x: x[6] if x[6] is not None else "", reverse=True)
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    _retryable = ("RPC" in err_str or "Channel" in err_str or
+                                  "not logged in" in err_str or
+                                  "please select a database" in err_str or
+                                  "StatusCode.CANCELLED" in err_str or
+                                  "Stream removed" in err_str or
+                                  "Socket closed" in err_str or
+                                  "UNAVAILABLE" in err_str or
+                                  "invalid token" in err_str or
+                                  "invalid session" in err_str or
+                                  "INTERNAL" in err_str)
+                    if _retryable and attempt < MAX_ATTEMPTS:
+                        jitter = 0.1 + random.uniform(0, 0.2)
+                        time.sleep(jitter)
+                        immudb_service._connect(failed_client=client)
+                        continue
+                    raise e
             
             # Filter results in Python for case-insensitive matching
             filtered_results = []
@@ -1628,6 +2068,9 @@ def index():
         formatted_results = []
         for row in paginated_results:
             row_list = list(row)
+            # Extract IDs and generate EHR links html from raw row[4] and row[5]
+            ehr_links_html = generate_ehr_links_html(row_list[4], row_list[5])
+            
             # Apply highlighting to request_data and response_data
             if search_params.get('search_text'):
                 row_list[4] = highlight_search_term(row_list[4], search_params['search_text'])
@@ -1636,6 +2079,8 @@ def index():
                 # Escape HTML even when not highlighting
                 row_list[4] = html.escape(str(row_list[4]))
                 row_list[5] = html.escape(str(row_list[5]))
+                
+            row_list.append(ehr_links_html)
             formatted_results.append(row_list)
 
         start_item = start_idx + 1 if total_count > 0 else 0
@@ -1715,10 +2160,38 @@ def api_search():
         if search_params['date_to']:
             query += f" AND created_at <= '{search_params['date_to']}'"
 
-        query += " ORDER BY created_at DESC"
-
         try:
-            results = immudb_service.client.sqlQuery(query)
+            import random
+            import time
+            results = None
+            MAX_ATTEMPTS = 3
+            for attempt in range(1, MAX_ATTEMPTS + 1):
+                try:
+                    client = immudb_service._get_client()
+                    if not client:
+                        raise Exception("ImmuDB client is not available")
+                    results = client.sqlQuery(query)
+                    if results:
+                        results.sort(key=lambda x: x[6] if x[6] is not None else "", reverse=True)
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    _retryable = ("RPC" in err_str or "Channel" in err_str or
+                                  "not logged in" in err_str or
+                                  "please select a database" in err_str or
+                                  "StatusCode.CANCELLED" in err_str or
+                                  "Stream removed" in err_str or
+                                  "Socket closed" in err_str or
+                                  "UNAVAILABLE" in err_str or
+                                  "invalid token" in err_str or
+                                  "invalid session" in err_str or
+                                  "INTERNAL" in err_str)
+                    if _retryable and attempt < MAX_ATTEMPTS:
+                        jitter = 0.1 + random.uniform(0, 0.2)
+                        time.sleep(jitter)
+                        immudb_service._connect(failed_client=client)
+                        continue
+                    raise e
             
             # Filter results in Python for case-insensitive matching
             filtered_results = []
@@ -1775,6 +2248,9 @@ def api_search():
             # Store raw data before any modification for the JSON modal usage
             raw_request = str(row_list[4]) if row_list[4] else ""
             raw_response = str(row_list[5]) if row_list[5] else ""
+            
+            # Generate EHR links
+            ehr_links_html = generate_ehr_links_html(raw_request, raw_response)
 
             # Apply highlighting or escaping for the HTML table display
             if search_params.get('search_text'):
@@ -1793,7 +2269,8 @@ def api_search():
                 'response_data': display_response,
                 'raw_request_data': raw_request, # Send raw data for JS modal access
                 'raw_response_data': raw_response,
-                'created_at': row_list[6]
+                'created_at': row_list[6],
+                'ehr_links_html': ehr_links_html
             })
 
         return jsonify({

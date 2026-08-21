@@ -88,15 +88,27 @@ export function useEhrPatientData({ form = null, autoFetch = true } = {}) {
     if (patientData) {
       const mapped = mapPatientToFormio(patientData, form);
       
-      // Filter out non-primitive values
-      const filteredMapped = {};
-      Object.keys(mapped).forEach(key => {
-        const value = mapped[key];
-        if (value !== null && value !== undefined && typeof value !== 'object') {
-          filteredMapped[key] = typeof value === 'string' ? value : String(value);
+      // Filter out non-primitive values recursively to support nested components
+      const deepFilter = (obj) => {
+        if (obj === null || obj === undefined) return obj;
+        if (typeof obj === 'object') {
+          const result = {};
+          Object.keys(obj).forEach(k => {
+            const val = obj[k];
+            if (val !== null && val !== undefined) {
+              if (typeof val === 'object') {
+                result[k] = deepFilter(val);
+              } else {
+                result[k] = typeof val === 'string' ? val : String(val);
+              }
+            }
+          });
+          return result;
         }
-      });
+        return typeof obj === 'string' ? obj : String(obj);
+      };
       
+      const filteredMapped = deepFilter(mapped);
       setMappedData(filteredMapped);
     }
   }, [patientData, form]);

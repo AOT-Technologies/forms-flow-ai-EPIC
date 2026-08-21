@@ -8,21 +8,21 @@ WORKDIR /forms-flow-api/app
 
 # install curl, gnupg2 and unzip
 RUN  apt-get update \
-  && apt-get install -y git 
+  && apt-get install -y git gcc libffi-dev python3-dev
 
 COPY requirements.txt .
 ENV PATH=/venv/bin:$PATH
 
 RUN : \
     && python3 -m venv /venv \
-    && pip install --upgrade pip \
+    && pip install --upgrade pip setuptools wheel \
     && pip install -r requirements.txt 
 
 ADD . /forms-flow-api/app
 RUN pip install -e . \
     && pip uninstall ecdsa -y \
     && apt-get purge -y --auto-remove \
-      sqlite3 libsqlite3-0 git \
+      sqlite3 libsqlite3-0 git gcc libffi-dev python3-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

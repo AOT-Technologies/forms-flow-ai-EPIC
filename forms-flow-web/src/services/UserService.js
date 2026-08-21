@@ -39,6 +39,7 @@ const setKeycloakJson = (tenantKey = null, ...rest) => {
 
 const initKeycloak = (store, ...rest) => {
   const done = rest.length ? rest[1] : () => {};
+
   KeycloakData.init({
     onLoad: "check-sso",
     promiseType: "native",

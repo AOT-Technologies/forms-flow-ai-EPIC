@@ -136,15 +136,26 @@ class EpicService:
             logger.error(f"Error fetching encounter: {str(e)}")
             return None
 
-    async def send_approval_status(
-        self, patient_id: str, consent_text: str, surrogate_key: str = None, approved_at: str = None
+    async def create_document_reference(
+        self,
+        patient_id: str,
+        document_text: str,
+        document_title: str,
+        loinc_code: str = "11506-3",
+        loinc_display: str = "Progress note",
+        surrogate_key: str = None,
+        document_date: str = None,
     ):
         """
-        Send a general DocumentReference (Patient Media / Consent) to Epic.
-        No Encounter context needed with explicit scope authorization.
+        Build and POST a general DocumentReference to Epic.
+
+        Generalized from the original consent-approval document builder so
+        it can be reused by any write-back that needs to record free-text
+        content against a patient (e.g. consent approvals, screening
+        summaries), not just consent.
         """
-        if not approved_at:
-            approved_at = datetime.now(tz=timezone.utc).isoformat()
+        if not document_date:
+            document_date = datetime.now(tz=timezone.utc).isoformat()
 
         token_data = await self.get_access_token()
         token = token_data["access_token"]
@@ -154,7 +165,7 @@ class EpicService:
         if not encounter_id:
             logger.warning(f"No encounter found for patient {patient_id}. Epic may reject this.")
 
-        # Build the exact payload for a general patient consent
+        # Build the DocumentReference payload
         document_reference = {
             "resourceType": "DocumentReference",
             "status": "current",
@@ -172,11 +183,11 @@ class EpicService:
                 "coding": [
                     {
                         "system": "http://loinc.org",
-                        "code": "11506-3",
-                        "display": "Progress note",
+                        "code": loinc_code,
+                        "display": loinc_display,
                     }
                 ],
-                "text": "Patient Consent Form",
+                "text": document_title,
             },
             "category": [
                 {
@@ -196,15 +207,15 @@ class EpicService:
                     "display": "Ambulatory, James",
                 }
             ],
-            "date": approved_at,
+            "date": document_date,
             "content": [
                 {
                     "attachment": {
                         "contentType": "text/plain",
                         "data": base64.b64encode(
-                            (consent_text + (f" The surrogate Key is {surrogate_key}" if surrogate_key else "")).encode()
+                            (document_text + (f" The surrogate Key is {surrogate_key}" if surrogate_key else "")).encode()
                         ).decode(),
-                        "title": f"Patient Consent Form - Ref: {surrogate_key}" if surrogate_key else "Patient Consent Form",
+                        "title": f"{document_title} - Ref: {surrogate_key}" if surrogate_key else document_title,
                     }
                 }
             ],
@@ -215,7 +226,7 @@ class EpicService:
 
         import json
         logger.info(f"Sending DocumentReference to Epic: {json.dumps(document_reference, indent=2)}")
-        
+
         try:
             response = await self.client.post(
                 "/DocumentReference/",
@@ -231,7 +242,7 @@ class EpicService:
                 logger.error(f"Epic rejected the payload: {response.text}")
 
             response.raise_for_status()
-            logger.info("Successfully posted Approval to Epic.")
+            logger.info("Successfully posted DocumentReference to Epic.")
 
             try:
                 if response.headers.get("content-type", "").startswith("application/json"):
@@ -257,6 +268,104 @@ class EpicService:
         except Exception as e:
             logger.error(f"Unexpected error sending DocumentReference: {str(e)}")
             raise
+
+    async def send_approval_status(
+        self, patient_id: str, consent_text: str, surrogate_key: str = None, approved_at: str = None
+    ):
+        """
+        Send a general DocumentReference (Patient Media / Consent) to Epic.
+        No Encounter context needed with explicit scope authorization.
+        """
+        return await self.create_document_reference(
+            patient_id=patient_id,
+            document_text=consent_text,
+            document_title="Patient Consent Form",
+            surrogate_key=surrogate_key,
+            document_date=approved_at,
+        )
+
+    async def create_observation(
+        self, patient_id: str, observations: list, effective_date: str = None
+    ):
+        """
+        Build and POST one FHIR Observation resource per entry in
+        `observations` to Epic. Each entry is a dict with `code` (LOINC
+        code), `display` (text), and `value` (numeric). Posts one
+        Observation per entry rather than a transaction Bundle, mirroring
+        create_patient's single-resource-per-call shape.
+        """
+        if not effective_date:
+            effective_date = datetime.now(tz=timezone.utc).isoformat()
+
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+
+        results = []
+        for obs in observations:
+            observation_resource = {
+                "resourceType": "Observation",
+                "status": "final",
+                "code": {
+                    "coding": [
+                        {
+                            "system": "http://loinc.org",
+                            "code": obs["code"],
+                            "display": obs.get("display", ""),
+                        }
+                    ],
+                    "text": obs.get("display", ""),
+                },
+                "subject": {"reference": f"Patient/{patient_id}"},
+                "effectiveDateTime": effective_date,
+                "valueQuantity": {
+                    "value": obs["value"],
+                },
+            }
+
+            logger.info(f"Sending Observation to Epic: {observation_resource}")
+
+            try:
+                response = await self.client.post(
+                    "/Observation",
+                    json=observation_resource,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/fhir+json",
+                        "Accept": "application/fhir+json",
+                    },
+                )
+
+                if response.status_code != 201:
+                    logger.error(f"Epic rejected the Observation payload: {response.text}")
+
+                response.raise_for_status()
+                logger.info(f"Successfully posted Observation ({obs['code']}) to Epic.")
+
+                try:
+                    if response.headers.get("content-type", "").startswith("application/json"):
+                        results.append(response.json())
+                    else:
+                        results.append({
+                            "status": "success",
+                            "message": "Observation created in Epic",
+                            "status_code": response.status_code,
+                            "id": response.headers.get("Location", "").split("/")[-1],
+                        })
+                except Exception:
+                    results.append({
+                        "status": "success",
+                        "message": "Observation created (no JSON body returned)",
+                        "status_code": response.status_code,
+                    })
+
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP Error creating observation: {e.response.status_code} - {e.response.text}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error creating observation: {str(e)}")
+                raise
+
+        return {"observations": results}
 
     async def search_documents(self, patient_id: str):
         """
@@ -310,4 +419,225 @@ class EpicService:
             raise
         except Exception as e:
             logger.error(f"Unexpected error fetching binary: {str(e)}")
+            raise
+
+    async def get_patient(self, patient_id: str):
+        """
+        Fetch a single Patient from Epic.
+        """
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+        
+        url = f"/Patient/{patient_id}"
+        logger.info(f"Fetching Patient {patient_id}...")
+        
+        try:
+            response = await self.client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/fhir+json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error fetching patient: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error fetching patient: {str(e)}")
+            raise
+
+    async def get_encounter(self, encounter_id: str):
+        """
+        Fetch a single Encounter from Epic.
+        """
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+        
+        url = f"/Encounter/{encounter_id}"
+        logger.info(f"Fetching Encounter {encounter_id}...")
+        
+        try:
+            response = await self.client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/fhir+json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error fetching encounter: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error fetching encounter: {str(e)}")
+            raise
+
+    async def get_documentref(self, docref_id: str):
+        """
+        Fetch a single DocumentReference from Epic.
+        """
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+        
+        url = f"/DocumentReference/{docref_id}"
+        logger.info(f"Fetching DocumentReference {docref_id}...")
+        
+        try:
+            response = await self.client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/fhir+json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error fetching document reference: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error fetching document reference: {str(e)}")
+            raise
+
+    async def get_observation(self, observation_id: str):
+        """
+        Fetch a single Observation resource by ID from Epic.
+        """
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+
+        url = f"/Observation/{observation_id}"
+        logger.info(f"Fetching Observation {observation_id} from Epic...")
+
+        try:
+            response = await self.client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/fhir+json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error fetching observation {observation_id}: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error fetching observation {observation_id}: {str(e)}")
+            raise
+
+    async def search_encounters(self, patient_id: str):
+        """
+        Search for Encounter resources for a patient.
+        """
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+        
+        url = f"/Encounter?patient={patient_id}"
+        logger.info(f"Searching Encounters for patient {patient_id}...")
+        
+        try:
+            response = await self.client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/fhir+json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error searching encounters: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error searching encounters: {str(e)}")
+            raise
+
+    async def search_observations(self, patient_id: str):
+        """
+        Search for Observation resources for a patient.
+        """
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+
+        url = f"/Observation?patient={patient_id}"
+        logger.info(f"Searching Observations for patient {patient_id}...")
+
+        try:
+            response = await self.client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/fhir+json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error searching observations: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error searching observations: {str(e)}")
+            raise
+
+    async def create_patient(self, fhir_patient: dict):
+        """
+        Create a Patient resource in Epic.
+        """
+        token_data = await self.get_access_token()
+        token = token_data["access_token"]
+        
+        logger.info(f"Creating Patient in Epic... {fhir_patient}")
+        try:
+            response = await self.client.post(
+                "/Patient",
+                json=fhir_patient,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/fhir+json",
+                    "Accept": "application/fhir+json",
+                },
+            )
+            
+            if response.status_code != 201:
+                logger.error(f"Epic rejected Patient creation payload: {response.text}")
+            
+            response.raise_for_status()
+            logger.info(f"Successfully created Patient in Epic. Response: {response.json()}")
+            
+            try:
+                content_type = response.headers.get("content-type", "").lower()
+                if "json" in content_type:
+                    return response.json()
+                else:
+                    # Parse Location header to get the ID if JSON is not returned
+                    location = response.headers.get("Location", "")
+                    patient_id = ""
+                    if location:
+                        parts = location.split("/")
+                        if "_history" in parts:
+                            idx = parts.index("_history")
+                            patient_id = parts[idx - 1]
+                        else:
+                            patient_id = parts[-1]
+                    return {
+                        "status": "success",
+                        "message": "Patient created in Epic",
+                        "status_code": response.status_code,
+                        "id": patient_id,
+                    }
+            except Exception:
+                return {
+                    "status": "success",
+                    "message": "Patient created (no JSON body returned)",
+                    "status_code": response.status_code,
+                }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error creating patient: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error creating patient: {str(e)}")
             raise

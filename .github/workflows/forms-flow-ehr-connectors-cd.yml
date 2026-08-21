@@ -1,0 +1,150 @@
+name: Deploy EHR Connectors to EKS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, develop, release/*, poc/docker-build-issue-fix ]
+    paths:
+      - "ehr_connectors/**"
+      - "VERSION"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-and-push:
+    if: github.repository == 'yaseen-aot/forms-flow-ai'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      immudb: ${{ steps.filter.outputs.immudb }}
+      connectors: ${{ steps.filter.outputs.connectors }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      # Detect changed files to determine build targets
+      - name: Check changed files
+        id: filter
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            immudb:
+              - 'ehr_connectors/immudb-audit-plugin/**'
+            connectors:
+              - 'ehr_connectors/**'
+              - '!ehr_connectors/immudb-audit-plugin/**'
+              - 'VERSION'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          install: true
+
+      # Generate unique version using timestamp (version.YYYYMMDDHHMMSS)
+      - name: Set version
+        id: get_version
+        run: |
+          VER=$(cat VERSION)
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            VER=${VER/-alpha/''}
+          fi
+          TIMESTAMP=$(date +'%Y%m%d%H%M%S')
+          FINAL_VER="${VER}.${TIMESTAMP}"
+          echo "VERSION=${FINAL_VER}" >> $GITHUB_ENV
+          echo "version=${FINAL_VER}" >> $GITHUB_OUTPUT
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+
+      - name: Verify build tags and targets
+        run: |
+          echo "Target version tag: ${{ env.VERSION }}"
+          echo "Build EHR Connectors target: ${{ steps.filter.outputs.connectors }}"
+          echo "Build ImmuDB Audit Plugin target: ${{ steps.filter.outputs.immudb }}"
+
+      # Build and push EHR Connector (only if connector files changed)
+      - name: Build and push EHR Connectors
+        if: steps.filter.outputs.connectors == 'true'
+        uses: docker/build-push-action@v4
+        with:
+          context: ehr_connectors
+          file: ehr_connectors/Dockerfile
+          push: true
+          tags: docker.io/formsflow/forms-flow-ehr-connectors:${{ env.VERSION }}
+
+      # Build and push ImmuDB Audit Plugin (only if plugin files changed)
+      - name: Build and push ImmuDB Audit Plugin
+        if: steps.filter.outputs.immudb == 'true'
+        uses: docker/build-push-action@v4
+        with:
+          context: ehr_connectors/immudb-audit-plugin
+          file: ehr_connectors/immudb-audit-plugin/Dockerfile
+          push: true
+          tags: docker.io/formsflow/forms-flow-immudb-plugin:${{ env.VERSION }}
+
+  deploy:
+    needs: build-and-push
+    if: github.repository == 'yaseen-aot/forms-flow-ai'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set version
+        run: |
+          echo "VERSION=${{ needs.build-and-push.outputs.version }}" >> $GITHUB_ENV
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_DEPLOYMENT_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_DEPLOYMENT_SECRET_ACCESS_KEY }}
+          aws-region: ca-central-1
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Verify EKS token
+        run: aws eks get-token --cluster-name ${{ secrets.QA_EKS_CLUSTER }}
+
+      - name: Update Kube config
+        run: aws eks update-kubeconfig --region ca-central-1 --name ${{ secrets.QA_EKS_CLUSTER }}
+
+      - name: Verify kubectl and deployments
+        run: |
+          kubectl config current-context
+          kubectl get ns
+          echo "=== Deployments ==="
+          kubectl get deployments -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} || echo "failed listing"
+          echo "=== StatefulSets ==="
+          kubectl get statefulsets -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} || echo "failed listing"
+          echo "=== BPM Init Containers ==="
+          kubectl get deployment forms-flow-bpm -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} -o jsonpath='{.spec.template.spec.initContainers[*].name}' || echo "failed listing"
+
+      - name: Deploy EHR Connectors to EKS
+        run: |
+          if [ "${{ needs.build-and-push.outputs.connectors }}" = "true" ]; then
+            echo "Deploying updated EHR Connectors (StatefulSet)..."
+            kubectl -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} patch statefulset ehr-connector -p '{"spec":{"template":{"spec":{"containers":[{"name":"ehr-connector","image":"docker.io/formsflow/forms-flow-ehr-connectors:${{ env.VERSION }}"}]}}}}' || echo "skip"
+            kubectl rollout restart statefulset ehr-connector -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} || echo "restart skipped"
+          fi
+          
+          if [ "${{ needs.build-and-push.outputs.immudb }}" = "true" ]; then
+            echo "Deploying updated ImmuDB Audit Plugin (BPM initContainer)..."
+            kubectl -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} patch deployment forms-flow-bpm -p '{"spec":{"template":{"spec":{"initContainers":[{"name":"immudb-audit-plugin","image":"docker.io/formsflow/forms-flow-immudb-plugin:${{ env.VERSION }}"}]}}}}' || echo "skip"
+            kubectl rollout restart deployment forms-flow-bpm -n ${{ secrets.QA_OPENSOURCE_NAMESPACE }} || echo "restart skipped"
+          fi

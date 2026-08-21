@@ -5,6 +5,7 @@ import { ConnectedRouter } from "connected-react-router";
 import "../assets/styles/layouts.scss";
 import "../assets/styles/user-styles.css";
 import "../assets/styles/formioTooltip.scss";
+import "../styles.scss";
 import BaseRouting from "./BaseRouting";
 import { Helmet } from "react-helmet";
 import { KEYCLOAK_URL } from "../constants/constants";

@@ -75,7 +75,7 @@ services:
       - '8000:8080'
     volumes:
       - ./plugins:/app/plugins
-    entrypoint: ["java", "-Djava.security.egd=file:/dev/./urandom", "-Dloader.path=/app/plugins", "-jar", "/app/forms-flow-bpm.jar"]
+    # entrypoint uses the Dockerfile default (entrypoint.sh) which boots with PropertiesLauncher and maps mail JVM flags
     environment:
       - KEYCLOAK_URL=${KEYCLOAK_URL}
       - KEYCLOAK_URL_REALM=${KEYCLOAK_URL_REALM:-forms-flow-ai}
@@ -140,9 +140,11 @@ services:
       - CSS_ENV=${CSS_ENV:-}
       - CSS_INTEGRATION_ID=${CSS_INTEGRATION_ID:-}
       - USER_NAME_DISPLAY_CLAIM=${USER_NAME_DISPLAY_CLAIM:-}
+      - MAIL_USER=${MAIL_USER}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
     networks:
       - forms-flow-network
- 
+
   forms-flow-web-root-config:
     container_name: forms-flow-web-root-config
     restart: always
@@ -159,6 +161,7 @@ services:
         - MF_FORMSFLOW_ADMIN_URL=${MF_FORMSFLOW_ADMIN_URL:-https://forms-flow-microfrontends.aot-technologies.com/forms-flow-admin@v8.1.0-alpha/forms-flow-admin.gz.js}
         - MF_FORMSFLOW_REVIEW_URL=${MF_FORMSFLOW_REVIEW_URL:-https://forms-flow-microfrontends.aot-technologies.com/forms-flow-review@v8.1.0-alpha/forms-flow-review.gz.js}
         - MF_FORMSFLOW_SUBMISSIONS_URL=${MF_FORMSFLOW_SUBMISSIONS_URL:-https://forms-flow-microfrontends.aot-technologies.com/forms-flow-submissions@v8.1.0-alpha/forms-flow-submissions.gz.js}
+        - MF_FORMSFLOW_CUSTOM_SERVICES_UI_URL=${MF_FORMSFLOW_CUSTOM_SERVICES_UI_URL:-https://forms-flow-presales-microfrontends.aot-technologies.com/forms-flow-custom-services-UI@v8.1.2/forms-flow-custom-services-UI.gz.js}
         - NODE_ENV=${NODE_ENV:-production}
     entrypoint: /bin/sh -c "/usr/share/nginx/html/config/env.sh && nginx -g 'daemon off;'"
     environment:
@@ -166,6 +169,7 @@ services:
       - REACT_APP_API_SERVER_URL=${FORMIO_DEFAULT_PROJECT_URL}
       - REACT_APP_LANGUAGE=${LANGUAGE:-en}
       - REACT_APP_API_PROJECT_URL=${FORMIO_DEFAULT_PROJECT_URL}
+      - REACT_APP_FORMIO_DEFAULT_PROJECT_URL=${FORMIO_DEFAULT_PROJECT_URL}
       - REACT_APP_KEYCLOAK_CLIENT=${KEYCLOAK_WEB_CLIENT_ID:-forms-flow-web}
       - REACT_APP_WEB_BASE_URL=${FORMSFLOW_API_URL}
       - REACT_APP_BPM_URL=${BPM_API_URL}
@@ -199,6 +203,13 @@ services:
       - REACT_APP_USER_NAME_DISPLAY_CLAIM=${USER_NAME_DISPLAY_CLAIM:-}
       - REACT_APP_ENABLE_COMPACT_FORM_VIEW=${ENABLE_COMPACT_FORM_VIEW:-false}
       - REACT_APP_GRAPHQL_API_URL=${GRAPHQL_API_URL}      
+      - REACT_APP_SMART_CLIENT_ID=${REACT_APP_SMART_CLIENT_ID}
+      - REACT_APP_SMART_REDIRECT_URI=${REACT_APP_SMART_REDIRECT_URI}
+      - REACT_APP_SMART_SCOPE=${REACT_APP_SMART_SCOPE}
+      - REACT_APP_EHR_CONNECTOR_URL=${REACT_APP_EHR_CONNECTOR_URL}
+      - REACT_APP_KEYCLOAK_EPIC_REALM_URL=${REACT_APP_KEYCLOAK_EPIC_REALM_URL}
+      - REACT_APP_KEYCLOAK_EPIC_CLIENT_ID=${REACT_APP_KEYCLOAK_EPIC_CLIENT_ID:-formsflow-epic-web}
+      - REACT_APP_EHR_DEBUG=${REACT_APP_EHR_DEBUG:-false}
     ports:
       - '3000:8080'
     tty: true
@@ -407,6 +418,49 @@ services:
       - forms-flow-bpm
     stdin_open: true # -i
     tty: true # -t
+    networks:
+      - forms-flow-network
+
+  ehr-connectors:
+    container_name: ehr-connectors
+    build:
+      context: ./../../ehr_connectors/
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - '8002:8002'
+      - '8003:8003'
+    env_file:
+      - ./../../ehr_connectors/.env
+    networks:
+      - forms-flow-network
+
+  forms-flow-custom-services:
+    container_name: forms-flow-custom-services
+    build:
+      context: ./../../forms-flow-custom-services/
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - '5005:5005'
+    environment:
+      - PORT=5005
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-change-me-to-something-secure}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-to-something-secure}
+      - MAGIC_LINK_TOKEN_URL=${MAGIC_LINK_TOKEN_URL:-http://localhost:3000/custom-services/magic-links/public}
+      - FORMIO_DEFAULT_PROJECT_URL=${FORMIO_DEFAULT_PROJECT_URL:-http://forms-flow-forms:3001}
+      - BPM_API_URL=${BPM_API_URL:-http://forms-flow-bpm:8080/camunda}
+      - FORMSFLOW_API_URL=${FORMSFLOW_API_URL:-http://forms-flow-webapi:5000}
+      - KEYCLOAK_TOKEN_URL=${KEYCLOAK_URL}${KEYCLOAK_URL_HTTP_RELATIVE_PATH:-/auth}/realms/${KEYCLOAK_URL_REALM:-forms-flow-ai}/protocol/openid-connect/token
+      - KEYCLOAK_BPM_CLIENT_ID=${KEYCLOAK_BPM_CLIENT_ID:-forms-flow-bpm}
+      - KEYCLOAK_BPM_CLIENT_SECRET=${KEYCLOAK_BPM_CLIENT_SECRET}
+      - FORMIO_ROOT_EMAIL=${FORMIO_ROOT_EMAIL:-admin@example.com}
+      - FORMIO_ROOT_PASSWORD=${FORMIO_ROOT_PASSWORD:-changeme}
+    depends_on:
+      - forms-flow-webapi
+      - forms-flow-bpm
+      - forms-flow-forms
     networks:
       - forms-flow-network
 

@@ -65,7 +65,26 @@ export function getSMARTConfig(formId = null) {
     redirectUri: redirectUri,
     scope: (window._env_ && window._env_.REACT_APP_SMART_SCOPE) ||
            process.env.REACT_APP_SMART_SCOPE ||
-           'launch launch/patient patient/*.read'
+           // openid fhirUser requests Epic's signed id_token/fhirUser claim -
+           // required for the Keycloak handoff in keycloakHandoff.js.
+           'openid fhirUser launch launch/patient patient/*.read'
+  };
+}
+
+/**
+ * Config for handing an EHR-launched session off to Keycloak (see
+ * keycloakHandoff.js). Separate from getSMARTConfig() above since these
+ * point at formsflow's own services, not Epic's.
+ */
+export function getKeycloakHandoffConfig() {
+  return {
+    ehrConnectorUrl: (window._env_ && window._env_.REACT_APP_EHR_CONNECTOR_URL) ||
+                     process.env.REACT_APP_EHR_CONNECTOR_URL,
+    keycloakRealmUrl: (window._env_ && window._env_.REACT_APP_KEYCLOAK_EPIC_REALM_URL) ||
+                      process.env.REACT_APP_KEYCLOAK_EPIC_REALM_URL,
+    clientId: (window._env_ && window._env_.REACT_APP_KEYCLOAK_EPIC_CLIENT_ID) ||
+              process.env.REACT_APP_KEYCLOAK_EPIC_CLIENT_ID ||
+              'formsflow-epic-web',
   };
 }
 

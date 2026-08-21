@@ -75,6 +75,8 @@ services:
       - REDIS_PASSCODE=${REDIS_PASSCODE:-changeme}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - FORMSFLOW_DOC_API_URL=${FORMSFLOW_DOC_API_URL}
+      - MAIL_USER=${MAIL_USER}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
 
     networks:
       - forms-flow-bpm-network

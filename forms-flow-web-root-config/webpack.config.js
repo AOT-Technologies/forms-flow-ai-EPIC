@@ -48,7 +48,7 @@ module.exports = (webpackConfigEnv, argv) => {
             globOptions: {
               dot: true,
               gitignore: true,
-              ignore: ["**/index.html"],
+              ignore: ["index.html"],
             },
           },
         ],

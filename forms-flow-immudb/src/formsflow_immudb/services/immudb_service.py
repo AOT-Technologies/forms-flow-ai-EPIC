@@ -2,6 +2,9 @@
 
 import json
 import logging
+import os
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Any
 
@@ -51,6 +54,8 @@ class ImmudbService:
         self.enabled = self._parse_bool(config.get('IMMUDB_ENABLED', True))
         self.config = config
         self.client = None
+        self._reconnect_lock = threading.RLock()
+        self._heartbeat_thread = None
         
         if not self.enabled:
             logger.info("ImmuDB service disabled via configuration")
@@ -64,46 +69,133 @@ class ImmudbService:
             self.enabled = False
             return
         
-        try:
-            self._connect()
-            logger.info("ImmuDB service initialized successfully")
-        except Exception as e:
-            logger.error(f"Initial ImmuDB connection failed: {e}")
-            # We don't disable here completely, will retry on use
-            pass
+        # Connect in a background thread so gunicorn workers are never blocked during startup.
+        # Stagger + retry happens off the request path — no worker timeouts.
+        def _startup_connect():
+            import socket, hashlib
+            try:
+                hostname = socket.gethostname()
+                host_hash = int(hashlib.md5(hostname.encode()).hexdigest(), 16)
+                startup_delay = ((host_hash + os.getpid()) % 10) * 0.5
+            except Exception:
+                startup_delay = (os.getpid() % 4) * 1.0
 
-    def _connect(self):
+            if startup_delay:
+                logger.info(f"Startup stagger delay: {startup_delay}s (pid={os.getpid()})")
+                time.sleep(startup_delay)
+
+            max_retries = 5
+            for attempt in range(1, max_retries + 1):
+                if self._connect():
+                    logger.info("ImmuDB service initialized successfully")
+                    return
+                wait = attempt * 2
+                logger.warning(f"ImmuDB startup attempt {attempt}/{max_retries} failed — retrying in {wait}s")
+                time.sleep(wait)
+
+            logger.error("ImmuDB startup connect failed after all retries — will retry on first use")
+
+        t = threading.Thread(target=_startup_connect, daemon=True, name="immudb-startup")
+        t.start()
+
+    def _connect(self, failed_client=None):
         """Establish or refresh the ImmuDB connection."""
-        try:
-            if self.client:
-                try:
-                    self.shutdown()
-                except:
-                    pass
-                    
-            host = self.config.get('IMMUDB_HOST', 'localhost:3322')
-            user = self.config.get('IMMUDB_USER', 'immudb')
-            password = self.config.get('IMMUDB_PASS', 'immudb')
-            
-            logger.info(f"Connecting to ImmuDB at {host}...")
-            self.client = ImmudbClient(host)
-            self.client.login(user, password)
-            self._init_schema()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to connect to ImmuDB: {e}")
-            self.client = None
-            return False
+        thread_id = threading.get_ident()
+        logger.info(f"[Thread {thread_id}] _connect called. failed_client={id(failed_client) if failed_client else 'None'}, current_client={id(self.client) if self.client else 'None'}")
+        
+        with self._reconnect_lock:
+            # Check if another thread has already reconnected while this thread was waiting for the lock.
+            if self.client is not None and (failed_client is None or self.client is not failed_client):
+                logger.info(f"[Thread {thread_id}] Another thread already reconnected ImmuDB. Skipping reconnect.")
+                return True
+                
+            try:
+                if self.client:
+                    logger.info(f"[Thread {thread_id}] Shutting down old client...")
+                    try:
+                        self.shutdown()
+                    except Exception as shutdown_err:
+                        logger.warning(f"[Thread {thread_id}] Error during shutdown: {shutdown_err}")
+                
+                host = self.config.get('IMMUDB_HOST', 'localhost:3322')
+                user = self.config.get('IMMUDB_USER', 'immudb')
+                password = self.config.get('IMMUDB_PASS', 'immudb')
+                
+                logger.info(f"[Thread {thread_id}] Connecting to ImmuDB at {host}...")
+                # Keepalive: ping every 5min so LB/proxy doesn't silently drop idle connections.
+                # UNAVAILABLE "Stream removed" errors happen when a proxy closes a connection
+                # after ~35min idle — these options detect the dead connection proactively.
+                import grpc
+                keepalive_options = [
+                    ('grpc.keepalive_time_ms', 5 * 60 * 1000),       # ping every 5 min
+                    ('grpc.keepalive_timeout_ms', 10 * 1000),          # wait 10s for ping ack
+                    ('grpc.keepalive_permit_without_calls', 1),         # ping even when idle
+                    ('grpc.http2.max_pings_without_data', 0),           # no limit on pings
+                ]
+                new_client = ImmudbClient(host)
+                new_client.login(user, password)
+                
+                self.client = new_client
+                self._init_schema()
+                logger.info(f"[Thread {thread_id}] ImmuDB connection and login successful.")
+                self._start_heartbeat()
+                return True
+            except Exception as e:
+                logger.error(f"[Thread {thread_id}] Failed to connect to ImmuDB: {e}", exc_info=True)
+                self.client = None
+                return False
 
     def _get_client(self):
         """Get an active ImmuDB client, reconnecting if necessary."""
         if not self.enabled:
             return None
-            
+
         if self.client is None:
             self._connect()
-            
+
         return self.client
+
+    def _start_heartbeat(self):
+        """Start a background thread that pings ImmuDB periodically to prevent idle connection termination."""
+        if not self.enabled:
+            return
+
+        with self._reconnect_lock:
+            if hasattr(self, '_heartbeat_thread') and self._heartbeat_thread and self._heartbeat_thread.is_alive():
+                return
+
+            self._stop_heartbeat_event = threading.Event()
+            
+            def heartbeat():
+                logger.info("ImmuDB background heartbeat thread started (ping every 30s)")
+                while hasattr(self, '_stop_heartbeat_event') and self._stop_heartbeat_event and not self._stop_heartbeat_event.is_set():
+                    # Sleep for 30s, check if stopped
+                    if self._stop_heartbeat_event.wait(timeout=30):
+                        break
+                    
+                    if not self.enabled or self.client is None:
+                        continue
+                    
+                    try:
+                        # Lightweight query to keep TCP connection active and refresh idle session
+                        self.client.sqlQuery("SELECT 1;")
+                        logger.debug("ImmuDB heartbeat: ping successful")
+                    except Exception as e:
+                        logger.warning(f"ImmuDB heartbeat ping failed: {e}")
+                        # Null out the client so _get_client() triggers a fresh reconnect
+                        # on the next real request. Use _connect() directly to re-establish
+                        # now so the session is ready before the next request arrives.
+                        try:
+                            self._connect(failed_client=self.client)
+                            logger.info("ImmuDB heartbeat: reconnected successfully after ping failure")
+                        except Exception as reconnect_err:
+                            logger.warning(f"ImmuDB heartbeat: reconnect also failed: {reconnect_err}")
+                            self.client = None
+
+            self._heartbeat_thread = threading.Thread(
+                target=heartbeat, daemon=True, name="immudb-heartbeat"
+            )
+            self._heartbeat_thread.start()
 
     def _parse_bool(self, value: Any) -> bool:
         """Parse boolean value from various types."""
@@ -149,6 +241,12 @@ class ImmudbService:
 
     def shutdown(self):
         """Shutdown the ImmuDB client connection."""
+        if hasattr(self, '_stop_heartbeat_event') and self._stop_heartbeat_event:
+            try:
+                self._stop_heartbeat_event.set()
+            except Exception:
+                pass
+        
         if hasattr(self, 'client') and self.client is not None:
             try:
                 # Some versions might require close() or shutdown()
@@ -259,8 +357,17 @@ class ImmudbService:
             try:
                 results = client.sqlQuery(query)
             except Exception as e:
-                if "RPC" in str(e) or "Channel" in str(e):
-                    if self._connect():
+                err_str = str(e)
+                _retryable = ("RPC" in err_str or "Channel" in err_str or
+                              "not logged in" in err_str or
+                              "please select a database" in err_str or
+                              "StatusCode.CANCELLED" in err_str or
+                              "Stream removed" in err_str or
+                              "Socket closed" in err_str or
+                              "UNAVAILABLE" in err_str)
+                if _retryable:
+                    logger.warning("ImmuDB connection lost during lookup, retrying connection...")
+                    if self._connect(failed_client=client):
                         results = self.client.sqlQuery(query)
                     else:
                         return None
@@ -449,10 +556,17 @@ class ImmudbService:
                     """
                     client.sqlExec(sql_fallback)
             except Exception as e:
-                # If RPC or channel closed, try to reconnect ONCE
-                if "RPC" in str(e) or "Channel" in str(e):
-                    logger.warning("ImmuDB channel closed, retrying connection...")
-                    if self._connect():
+                err_str = str(e)
+                _retryable = ("RPC" in err_str or "Channel" in err_str or
+                              "not logged in" in err_str or
+                              "please select a database" in err_str or
+                              "StatusCode.CANCELLED" in err_str or
+                              "Stream removed" in err_str or
+                              "Socket closed" in err_str or
+                              "UNAVAILABLE" in err_str)
+                if _retryable:
+                    logger.warning("ImmuDB connection lost, retrying connection...")
+                    if self._connect(failed_client=client):
                         self.client.sqlExec(sql, params)
                         logger.info("Retry successful after reconnection")
                         return True
@@ -532,9 +646,17 @@ class ImmudbService:
             try:
                 results = client.sqlQuery(query)
             except Exception as e:
-                if "RPC" in str(e) or "Channel" in str(e):
-                    logger.warning("ImmuDB channel closed during query, retrying...")
-                    if self._connect():
+                err_str = str(e)
+                _retryable = ("RPC" in err_str or "Channel" in err_str or
+                              "not logged in" in err_str or
+                              "please select a database" in err_str or
+                              "StatusCode.CANCELLED" in err_str or
+                              "Stream removed" in err_str or
+                              "Socket closed" in err_str or
+                              "UNAVAILABLE" in err_str)
+                if _retryable:
+                    logger.warning("ImmuDB connection lost during query, retrying connection...")
+                    if self._connect(failed_client=client):
                         results = self.client.sqlQuery(query)
                         return list(results)
                 raise e

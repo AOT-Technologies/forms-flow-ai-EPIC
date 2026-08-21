@@ -57,7 +57,10 @@
           }
         }
         if (!scope) {
-          scope = 'patient/*.read launch launch/patient';
+          // openid fhirUser requests Epic's signed id_token/fhirUser claim,
+          // needed downstream by keycloakHandoff.js to establish a formsflow
+          // session without a second login.
+          scope = 'openid fhirUser patient/*.read launch launch/patient';
         }
         
         return { clientId, redirectUri, scope };

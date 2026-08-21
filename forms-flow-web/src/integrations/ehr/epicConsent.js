@@ -1,5 +1,6 @@
 import { launchSMART, getPatient, fetchPatientData } from "./service";
 import { debugError, debugLog } from "./config";
+import { completeKeycloakHandoff } from "./keycloakHandoff";
 
 /**
  * Send consent document to Epic FHIR server
@@ -27,7 +28,9 @@ export async function sendConsentDocumentToEpic(submissionData) {
     client.patient?.id || client.state?.tokenResponse?.patient;
 
   if (!patientId) {
-    throw new Error("No patient in SMART context. Patient ID could not be extracted from SMART client.");
+    throw new Error(
+      "No patient in SMART context. Patient ID could not be extracted from SMART client."
+    );
   }
 
   const approvedAt = submission.approvedAt || new Date().toISOString();
@@ -108,19 +111,39 @@ async function initializeSMART() {
       return null;
     }
 
-    // Get configuration from window or environment
+    // Get configuration from window or environment. REACT_APP_EPIC_* falls
+    // back to REACT_APP_SMART_* (the ones actually configured in
+    // deployment/docker/.env, also used by launch.html/config.js) rather
+    // than a separate hardcoded default - two parallel, differently-named
+    // config surfaces for the same SMART app was leaving this path
+    // unconfigured even though the "real" one was set.
     const clientId =
       window._env_?.REACT_APP_EPIC_CLIENT_ID ||
-      process.env.REACT_APP_EPIC_CLIENT_ID;
-    const redirectUri =
+      process.env.REACT_APP_EPIC_CLIENT_ID ||
+      window._env_?.REACT_APP_SMART_CLIENT_ID ||
+      process.env.REACT_APP_SMART_CLIENT_ID;
+    let redirectUri =
       window._env_?.REACT_APP_EPIC_REDIRECT_URI ||
-      process.env.REACT_APP_EPIC_REDIRECT_URI;
+      process.env.REACT_APP_EPIC_REDIRECT_URI ||
+      window._env_?.REACT_APP_SMART_REDIRECT_URI ||
+      process.env.REACT_APP_SMART_REDIRECT_URI;
     const defaultScope =
-      "launch patient/Patient.read patient/Observation.read";
+      window._env_?.REACT_APP_SMART_SCOPE ||
+      process.env.REACT_APP_SMART_SCOPE ||
+      "openid fhirUser launch patient/Patient.read patient/Observation.read";
     const scope =
       window._env_?.REACT_APP_EPIC_SCOPE ||
       process.env.REACT_APP_EPIC_SCOPE ||
       defaultScope;
+
+    // Fallback: If no redirect URI is configured, construct it from the current location
+    if (!redirectUri && typeof window !== "undefined") {
+      redirectUri = window.location.origin + window.location.pathname;
+      debugLog(
+        "No redirect URI configured. Calculated fallback redirectUri:",
+        redirectUri
+      );
+    }
 
     if (!clientId || !redirectUri) {
       debugError("Epic configuration missing: clientId or redirectUri not set");
@@ -129,7 +152,38 @@ async function initializeSMART() {
 
     // Launch SMART client
     debugLog("Initializing SMART client", { clientId });
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG initializeSMART calling launchSMART", { t: Date.now() });
     const client = await launchSMART(clientId, redirectUri, scope);
+    // eslint-disable-next-line no-console
+    console.error("EHR-DEBUG initializeSMART launchSMART resolved", {
+      t: Date.now(), hasClient: !!client, resourceType: client?.user?.resourceType,
+      patientId: client?.patient?.id, hasTokenResponse: !!client?.state?.tokenResponse,
+    });
+
+    // The URL at this point still carries the SMART/Epic OAuth flow's own
+    // leftover `code`/`state`/`iss`/`launch` params (needed above for
+    // launchSMART/fhirclient's own token exchange, which just completed).
+    // If anything later on this page calls instance.initKeycloak() - the
+    // isEHR poll loop's own fallback/notApplicable paths do exactly this -
+    // keycloak-js's init() inspects the current URL for its OWN OAuth
+    // callback and, finding a `code`/`state` pair it didn't issue, tries to
+    // redeem it at Keycloak's token endpoint anyway. That fails, and
+    // keycloak-js's recovery from that is to kick off a fresh top-level
+    // login redirect - landing on a plain login screen, looking identical
+    // to (and easily mistaken for) the check-sso/silentCheckSsoFallback
+    // behavior this file's other comments describe. Stripping the SMART
+    // params now, once they've served their purpose, removes the URL-based
+    // trigger for that collision for every code path that runs afterward.
+    if (typeof window !== "undefined" && window.history?.replaceState) {
+      const cleanUrl = new URL(window.location.href);
+      ["code", "state", "iss", "launch"].forEach((p) => cleanUrl.searchParams.delete(p));
+      window.history.replaceState({}, "", cleanUrl.toString());
+      // eslint-disable-next-line no-console
+      console.error("EHR-DEBUG initializeSMART stripped SMART params from URL", {
+        t: Date.now(), cleanUrl: cleanUrl.toString(),
+      });
+    }
 
     // Store client on window for use by other components
     if (client) {
@@ -138,6 +192,13 @@ async function initializeSMART() {
         "SMART client initialized successfully",
         { patientId: client.patient?.id }
       );
+
+      // Trade the completed Epic login for a real formsflow session - see
+      // keycloakHandoff.js. This redirects the browser away on success, so
+      // nothing after it on this page load will run in that case.
+      completeKeycloakHandoff(client).catch((err) => {
+        debugError("Keycloak handoff failed", err);
+      });
     }
 
     return client;

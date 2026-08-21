@@ -14,6 +14,15 @@
   "maxDeltaTimeSeconds": 1800,
   "failureFactor": 5,
   "roles": {
+    "realm": [
+      {
+        "name": "epic-patient",
+        "description": "JIT-provisioned, credential-less user created by EpicLaunchAssertionAuthenticator for a patient who arrived via a verified Epic EHR launch",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {}
+      }
+    ],
     "client": {
       "forms-flow-web": [
         {
@@ -272,6 +281,18 @@
               "create_designs",
               "manage_advance_workflows"
             ]
+          }
+        },
+        {
+          "name": "epic-patient",
+          "path": "/formsflow/epic-patient",
+          "subGroups": [],
+          "attributes": {
+            "description": ["Epic-launched patients - plain membership only, not referenced as a candidateGroups value on any BPMN task."]
+          },
+          "realmRoles": [],
+          "clientRoles": {
+            "forms-flow-web": ["create_submissions", "view_submissions", "view_tasks", "manage_tasks"]
           }
         },
         {
@@ -748,6 +769,50 @@
         "offline_access",
         "microprofile-jwt"
       ]
+    },
+    {
+      "clientId": "formsflow-epic-web",
+      "description": "EHR client for Epic launch authentication",
+      "surrogateAuthRequired": false,
+      "enabled": true,
+      "alwaysDisplayInConsole": false,
+      "clientAuthenticatorType": "client-secret",
+      "redirectUris": ["http://localhost:3000/epic-callback.html", "*"],
+      "webOrigins": ["*"],
+      "notBefore": 0,
+      "bearerOnly": false,
+      "consentRequired": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "publicClient": true,
+      "frontchannelLogout": false,
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "authenticationFlowBindingOverrides": {},
+      "fullScopeAllowed": false,
+      "nodeReRegistrationTimeout": -1,
+      "protocolMappers": [
+        {
+          "name": "patientId-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "patientId",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "patientId"
+          }
+        }
+      ],
+      "defaultClientScopes": ["web-origins", "roles", "profile", "basic"],
+      "optionalClientScopes": []
     }
   ],
   "clientScopes": [
